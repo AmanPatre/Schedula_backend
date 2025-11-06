@@ -9,7 +9,6 @@ import {
 } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
-
 import { SignInUserDto } from './dto/signin-user.dto';
 
 @Controller('auth')
@@ -24,6 +23,11 @@ export class UsersController {
   @Post('signin')
   signin(@Body() signInUserDto: SignInUserDto) {
     return this.usersService.signin(signInUserDto);
+  }
+
+  @Post('signout')
+  signout() {
+    return { message: 'User signed out successfully.' };
   }
 
   @Get()

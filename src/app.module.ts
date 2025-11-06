@@ -5,6 +5,11 @@ import { AppService } from './app.service';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { UsersModule } from './users/users.module';
+import { PatientsModule } from './patients/patients.module';
+import { DoctorsModule } from './doctors/doctors.module';
+import { SlotsModule } from './slots/slots.module';
+import { AppointmentsModule } from './appointments/appointments.module';
+import { TimesModule } from './times/times.module';
 
 @Module({
   imports: [
@@ -36,6 +41,16 @@ import { UsersModule } from './users/users.module';
     }),
 
     UsersModule,
+
+    PatientsModule,
+
+    DoctorsModule,
+
+    SlotsModule,
+
+    AppointmentsModule,
+
+    TimesModule,
     // --- END CONFIGURATION ---
   ],
   controllers: [AppController],
