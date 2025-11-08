@@ -1,34 +1,28 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Body,
+  UseGuards,
+  Req,
+  ConflictException,
+} from '@nestjs/common';
 import { SlotsService } from './slots.service';
 import { CreateSlotDto } from './dto/create-slot.dto';
-import { UpdateSlotDto } from './dto/update-slot.dto';
+import { AuthGuard } from '@nestjs/passport';
 
 @Controller('slots')
 export class SlotsController {
   constructor(private readonly slotsService: SlotsService) {}
 
   @Post()
-  create(@Body() createSlotDto: CreateSlotDto) {
-    return this.slotsService.create(createSlotDto);
-  }
+  @UseGuards(AuthGuard('jwt'))
+  create(@Body() createSlotDto: CreateSlotDto, @Req() req: any) {
+    const user = req.user;
 
-  @Get()
-  findAll() {
-    return this.slotsService.findAll();
-  }
+    if (user.role !== 'doctor') {
+      throw new ConflictException('Only doctors can set availability.');
+    }
 
-  @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.slotsService.findOne(+id);
-  }
-
-  @Patch(':id')
-  update(@Param('id') id: string, @Body() updateSlotDto: UpdateSlotDto) {
-    return this.slotsService.update(+id, updateSlotDto);
-  }
-
-  @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.slotsService.remove(+id);
+    return this.slotsService.create(createSlotDto, user.userId);
   }
 }
