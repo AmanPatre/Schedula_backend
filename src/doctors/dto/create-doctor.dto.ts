@@ -1,1 +1,4 @@
-export class CreateDoctorDto {}
+export class CreateDoctorDto {
+  specialization: string;
+  experience: string;
+}

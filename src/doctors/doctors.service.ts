@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, ConflictException } from '@nestjs/common';
 import { CreateDoctorDto } from './dto/create-doctor.dto';
 import { UpdateDoctorDto } from './dto/update-doctor.dto';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -8,13 +8,27 @@ import { Repository } from 'typeorm';
 @Injectable()
 export class DoctorsService {
   constructor(
-    // 1. Inject the Doctor Repository
     @InjectRepository(Doctor)
     private doctorRepository: Repository<Doctor>,
   ) {}
 
-  create(createDoctorDto: CreateDoctorDto) {
-    return 'This action adds a new doctor';
+  async create(createDoctorDto: CreateDoctorDto, userId: string) {
+    const existingProfile = await this.doctorRepository.findOne({
+      where: { userId },
+    });
+
+    if (existingProfile) {
+      throw new ConflictException(
+        'Doctor profile already exists for this user',
+      );
+    }
+
+    const newDoctorProfile = this.doctorRepository.create({
+      ...createDoctorDto,
+      userId: userId,
+    });
+
+    return this.doctorRepository.save(newDoctorProfile);
   }
 
   findAll() {

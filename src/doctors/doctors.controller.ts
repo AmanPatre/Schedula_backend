@@ -8,10 +8,14 @@ import {
   Delete,
   ClassSerializerInterceptor,
   UseInterceptors,
+  UseGuards,
+  Req,
+  ConflictException,
 } from '@nestjs/common';
 import { DoctorsService } from './doctors.service';
 import { CreateDoctorDto } from './dto/create-doctor.dto';
 import { UpdateDoctorDto } from './dto/update-doctor.dto';
+import { AuthGuard } from '@nestjs/passport';
 
 @UseInterceptors(ClassSerializerInterceptor)
 @Controller('doctors')
@@ -19,8 +23,17 @@ export class DoctorsController {
   constructor(private readonly doctorsService: DoctorsService) {}
 
   @Post()
-  create(@Body() createDoctorDto: CreateDoctorDto) {
-    return this.doctorsService.create(createDoctorDto);
+  @UseGuards(AuthGuard('jwt'))
+  create(@Body() createDoctorDto: CreateDoctorDto, @Req() req: any) {
+    const user = req.user;
+
+    if (user.role !== 'doctor') {
+      throw new ConflictException(
+        'Only users with role "doctor" can create a doctor profile.',
+      );
+    }
+
+    return this.doctorsService.create(createDoctorDto, user.userId);
   }
 
   @Get()
