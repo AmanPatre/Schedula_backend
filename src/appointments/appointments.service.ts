@@ -1,10 +1,13 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Appointment } from './entities/appointment.entity';
 import { Repository } from 'typeorm';
 import { Time } from 'src/times/entities/time.entity';
-import { Patient } from 'src/patients/entities/patient.entity';
 
 @Injectable()
 export class AppointmentsService {
@@ -45,8 +48,14 @@ export class AppointmentsService {
   findAllForPatient(patientId: string): Promise<Appointment[]> {
     return this.appointmentRepository.find({
       where: { patient: { id: patientId } },
-
       relations: ['doctor', 'doctor.user', 'time', 'time.slot'],
+    });
+  }
+
+  async findAllForDoctor(userId: string): Promise<Appointment[]> {
+    return this.appointmentRepository.find({
+      where: { doctor: { userId: userId } },
+      relations: ['patient', 'patient.user', 'time', 'time.slot'],
     });
   }
 
@@ -68,6 +77,35 @@ export class AppointmentsService {
     await this.appointmentRepository.remove(appointment);
 
     return { message: 'Appointment successfully canceled' };
+  }
+
+  async doctorCancel(
+    appointmentId: string,
+    doctorUserId: string,
+  ): Promise<{ message: string }> {
+    const appointment = await this.appointmentRepository.findOne({
+      where: { id: appointmentId },
+      relations: ['time', 'doctor'],
+    });
+
+    if (!appointment) {
+      throw new NotFoundException('Appointment not found');
+    }
+
+    if (appointment.doctor.userId !== doctorUserId) {
+      throw new UnauthorizedException(
+        'You are not authorized to cancel this appointment.',
+      );
+    }
+
+    if (appointment.time) {
+      appointment.time.isAvailable = true;
+      await this.timeRepository.save(appointment.time);
+    }
+
+    await this.appointmentRepository.remove(appointment);
+
+    return { message: 'Appointment successfully canceled by doctor.' };
   }
 
   findAll() {
