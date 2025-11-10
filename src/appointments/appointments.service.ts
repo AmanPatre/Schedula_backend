@@ -8,6 +8,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Appointment } from './entities/appointment.entity';
 import { Repository } from 'typeorm';
 import { Time } from 'src/times/entities/time.entity';
+// We can add this back when we build the reschedule feature
+// import { RescheduleAppointmentDto } from './dto/reschedule-appointment.dto';
 
 @Injectable()
 export class AppointmentsService {
@@ -100,19 +102,4 @@ export class AppointmentsService {
 
     if (appointment.time) {
       appointment.time.isAvailable = true;
-      await this.timeRepository.save(appointment.time);
-    }
-
-    await this.appointmentRepository.remove(appointment);
-
-    return { message: 'Appointment successfully canceled by doctor.' };
-  }
-
-  findAll() {
-    return `This action returns all appointments`;
-  }
-
-  findOne(id: string) {
-    return `This action returns a #${id} appointment`;
-  }
-}
+      await this.time
