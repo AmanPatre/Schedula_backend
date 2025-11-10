@@ -12,6 +12,12 @@ export class Time {
   @Column({ default: true })
   isAvailable: boolean;
 
+  @Column({ type: 'int', default: 1 })
+  capacity: number;
+
+  @Column({ type: 'int', default: 0 })
+  currentBookings: number;
+
   @ManyToOne(() => Slot, (slot) => slot.times)
   slot: Slot;
 }

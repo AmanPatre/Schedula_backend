@@ -4,7 +4,6 @@ import { UpdateDoctorDto } from './dto/update-doctor.dto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Doctor } from './entities/doctor.entity';
 import { Repository } from 'typeorm';
-import { UserRole } from 'src/users/entities/user.entity';
 
 @Injectable()
 export class DoctorsService {
@@ -32,8 +31,14 @@ export class DoctorsService {
     return this.doctorRepository.save(newDoctorProfile);
   }
 
-  findAll() {
+  findAll(specialization?: string) {
+    const whereCondition: any = {};
+    if (specialization) {
+      whereCondition.specialization = specialization;
+    }
+
     return this.doctorRepository.find({
+      where: whereCondition,
       relations: ['user'],
     });
   }

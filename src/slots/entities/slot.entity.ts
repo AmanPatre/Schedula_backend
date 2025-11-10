@@ -58,6 +58,18 @@ export class Slot {
   })
   dayOfWeek: DayOfWeek;
 
+  @Column({ type: 'time', nullable: true })
+  consultingStartTime: string;
+
+  @Column({ type: 'int', nullable: true })
+  slotDuration: number;
+
+  @Column({ type: 'int', default: 0 })
+  capacity: number;
+
+  @Column({ type: 'int', default: 0 })
+  currentBookings: number;
+
   @ManyToOne(() => Doctor, (doctor) => doctor.slots)
   doctor: Doctor;
 

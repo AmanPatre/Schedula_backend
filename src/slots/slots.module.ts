@@ -10,5 +10,6 @@ import { Time } from 'src/times/entities/time.entity';
   imports: [TypeOrmModule.forFeature([Slot, Doctor, Time])],
   controllers: [SlotsController],
   providers: [SlotsService],
+  exports: [SlotsService],
 })
 export class SlotsModule {}

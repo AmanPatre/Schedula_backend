@@ -1,7 +1,7 @@
-import { Patient } from 'src/patients/entities/patient.entity';
-import { Time } from 'src/times/entities/time.entity';
-
 export class CreateAppointmentDto {
-  patient: Patient;
-  time: Time;
+  patientId: string;
+
+  timeId?: string;
+
+  slotId?: string;
 }

@@ -24,7 +24,7 @@ export class AppointmentsController {
   constructor(private readonly appointmentsService: AppointmentsService) {}
 
   /**
-   * Endpoint for: Patient to book an appointment
+   * Endpoint for: 4️⃣ Patient to confirm an appointment (Wave or Stream)
    */
   @Post()
   create(@Body() createAppointmentDto: CreateAppointmentDto) {
@@ -37,6 +37,14 @@ export class AppointmentsController {
   @Get('patient/:patientId')
   findAllForPatient(@Param('patientId') patientId: string) {
     return this.appointmentsService.findAllForPatient(patientId);
+  }
+
+  /**
+   * Endpoint for: 5️⃣ Show Appointment Details
+   */
+  @Get(':id')
+  findOne(@Param('id') id: string) {
+    return this.appointmentsService.findOne(id);
   }
 
   /**
@@ -74,15 +82,4 @@ export class AppointmentsController {
     }
     return this.appointmentsService.doctorCancel(id, user.userId);
   }
-
-  /*
-  // This is for your NEXT feature (Reschedule)
-  @Patch(':id/reschedule')
-  reschedule(
-    @Param('id') id: string,
-    @Body() rescheduleDto: RescheduleAppointmentDto,
-  ) {
-    return this.appointmentsService.reschedule(id, rescheduleDto);
-  }
-  */
 }
