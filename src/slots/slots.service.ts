@@ -6,7 +6,7 @@ import {
 import { CreateSlotDto } from './dto/create-slot.dto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Slot, ScheduleType, DayOfWeek } from './entities/slot.entity';
-import { Repository } from 'typeorm';
+import { Repository, Raw } from 'typeorm';
 import { Doctor } from 'src/doctors/entities/doctor.entity';
 import { Time } from 'src/times/entities/time.entity';
 
@@ -96,7 +96,8 @@ export class SlotsService {
     const slots = await this.slotRepository.find({
       where: {
         doctor: { id: doctorId },
-        date: new Date(date),
+
+        date: Raw((alias) => `${alias} = :date`, { date: date }),
       },
       relations: ['times'],
     });
