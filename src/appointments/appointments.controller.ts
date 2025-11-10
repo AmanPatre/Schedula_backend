@@ -1,7 +1,23 @@
-import { Controller, Get, Post, Body, Param, Delete } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Param,
+  Delete,
+  ClassSerializerInterceptor,
+  UseInterceptors,
+  UseGuards,
+  Req,
+  ConflictException,
+  Patch,
+} from '@nestjs/common';
 import { AppointmentsService } from './appointments.service';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
+import { AuthGuard } from '@nestjs/passport';
 
+
+@UseInterceptors(ClassSerializerInterceptor)
 @Controller('appointments')
 export class AppointmentsController {
   constructor(private readonly appointmentsService: AppointmentsService) {}
@@ -20,4 +36,26 @@ export class AppointmentsController {
   remove(@Param('id') id: string) {
     return this.appointmentsService.remove(id);
   }
+
+  @Get('doctor/my-schedule')
+  @UseGuards(AuthGuard('jwt'))
+  findAllForDoctor(@Req() req: any) {
+    const user = req.user;
+    if (user.role !== 'doctor') {
+      throw new ConflictException('Only doctors can view this schedule.');
+    }
+    return this.appointmentsService.findAllForDoctor(user.userId);
+  }
+
+  @Delete('doctor/cancel/:id')
+  @UseGuards(AuthGuard('jwt'))
+  doctorCancel(@Param('id') id: string, @Req() req: any) {
+    const user = req.user;
+    if (user.role !== 'doctor') {
+      throw new ConflictException('Only doctors can cancel appointments.');
+    }
+    return this.appointmentsService.doctorCancel(id, user.userId);
+  }
+
+  
 }
