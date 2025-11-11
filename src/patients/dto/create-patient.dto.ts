@@ -1,1 +1,3 @@
-export class CreatePatientDto {}
+export class CreatePatientDto {
+  phoneNumber: string;
+}

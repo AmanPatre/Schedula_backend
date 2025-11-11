@@ -59,7 +59,7 @@ export class DoctorsService {
     const slots = await this.slotRepository.find({
       where: {
         doctor: { id: doctorId },
-        date: new Date(date), // <-- FIX
+        date: new Date(date), 
       },
     });
 
@@ -69,7 +69,7 @@ export class DoctorsService {
       );
     }
 
-    const response: any[] = []; // <-- FIX
+    const response: any[] = [];
     for (const slot of slots) {
       if (slot.scheduleType === 'stream') {
         if (slot.currentBookings < slot.totalCapacity) {

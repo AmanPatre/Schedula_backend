@@ -12,7 +12,7 @@ import { Time } from 'src/times/entities/time.entity';
 import { ConfigService } from '@nestjs/config';
 import { Slot } from 'src/slots/entities/slot.entity';
 import { UpdateAppointmentDto } from './dto/update-appointment.dto';
-// import { RescheduleAppointmentDto } from './dto/reschedule-appointment.dto'; // Removed
+
 
 @Injectable()
 export class AppointmentsService {
@@ -200,14 +200,7 @@ export class AppointmentsService {
     return this.remove(appointmentId);
   }
 
-  /*
-  async reschedule(
-    appointmentId: string,
-    rescheduleDto: RescheduleAppointmentDto,
-  ): Promise<Appointment> {
-    // This logic is commented out because the DTO doesn't exist yet
-  }
-  */
+ 
 
   findAll() {
     return `This action returns all appointments`;

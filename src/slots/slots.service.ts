@@ -24,7 +24,7 @@ export class SlotsService {
       throw new NotFoundException('Doctor profile not found for this user.');
     }
 
-    // Create the slot with all properties from the DTO
+  
     const newSlot = this.slotRepository.create({
       date: createSlotDto.date,
       doctor: doctor,
@@ -37,7 +37,7 @@ export class SlotsService {
     });
     await this.slotRepository.save(newSlot);
 
-    // If it's a WAVE, create all the Time blocks
+    
     if (createSlotDto.scheduleType === 'wave' && createSlotDto.startTimes) {
       const timePromises = createSlotDto.startTimes.map((time) => {
         const newTime = this.timeRepository.create({

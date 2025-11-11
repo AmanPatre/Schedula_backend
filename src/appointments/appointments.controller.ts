@@ -16,7 +16,6 @@ import { AppointmentsService } from './appointments.service';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
 import { UpdateAppointmentDto } from './dto/update-appointment.dto';
 import { AuthGuard } from '@nestjs/passport';
-// import { RescheduleAppointmentDto } from './dto/reschedule-appointment.dto'; // Removed
 
 @UseInterceptors(ClassSerializerInterceptor)
 @Controller('appointments')
