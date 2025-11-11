@@ -12,8 +12,8 @@ export class Time {
   @Column({ default: true })
   isAvailable: boolean;
 
-  @Column({ type: 'int', default: 1 })
-  capacity: number;
+  @Column({ type: 'int', default: 5 })
+  capacityPerSlot: number;
 
   @Column({ type: 'int', default: 0 })
   currentBookings: number;

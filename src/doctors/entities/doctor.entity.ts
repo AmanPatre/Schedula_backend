@@ -8,6 +8,7 @@ import {
   JoinColumn,
   OneToMany,
 } from 'typeorm';
+import { Appointment } from 'src/appointments/entities/appointment.entity';
 
 @Entity('doctors')
 export class Doctor {
@@ -29,4 +30,7 @@ export class Doctor {
 
   @OneToMany(() => Slot, (slot) => slot.doctor)
   slots: Slot[];
+
+  @OneToMany(() => Appointment, (appointment) => appointment.doctor)
+  appointments: Appointment[];
 }

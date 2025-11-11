@@ -1,12 +1,9 @@
-import {
-  Injectable,
-  NotFoundException,
-  ConflictException,
-} from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { CreateSlotDto } from './dto/create-slot.dto';
+import { UpdateSlotDto } from './dto/update-slot.dto';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Slot, ScheduleType, DayOfWeek } from './entities/slot.entity';
-import { Repository, Raw } from 'typeorm';
+import { Slot } from './entities/slot.entity';
+import { Repository } from 'typeorm';
 import { Doctor } from 'src/doctors/entities/doctor.entity';
 import { Time } from 'src/times/entities/time.entity';
 
@@ -27,113 +24,88 @@ export class SlotsService {
       throw new NotFoundException('Doctor profile not found for this user.');
     }
 
-    const dateObj = new Date(createSlotDto.date);
-    const dayOfWeek = dateObj.getDay() as DayOfWeek;
-
+    // Create the slot with all properties from the DTO
     const newSlot = this.slotRepository.create({
       date: createSlotDto.date,
       doctor: doctor,
-      scheduleType: createSlotDto.scheduleType,
       session: createSlotDto.session,
-      dayOfWeek: dayOfWeek,
+      scheduleType: createSlotDto.scheduleType,
+      dayOfWeek: createSlotDto.dayOfWeek,
+      consultingStartTime: createSlotDto.consultingStartTime,
+      slotDuration: createSlotDto.slotDuration,
+      totalCapacity: createSlotDto.totalCapacity,
     });
+    await this.slotRepository.save(newSlot);
 
-    let savedTimes: Time[] = [];
-
-    if (createSlotDto.scheduleType === ScheduleType.WAVE) {
-      if (
-        !createSlotDto.startTimes ||
-        !createSlotDto.capacityPerSlot ||
-        createSlotDto.startTimes.length === 0
-      ) {
-        throw new ConflictException(
-          'For WAVE scheduling, startTimes and capacityPerSlot are required.',
-        );
-      }
-
-      newSlot.capacity =
-        createSlotDto.startTimes.length * createSlotDto.capacityPerSlot;
-
-      await this.slotRepository.save(newSlot);
-
+    // If it's a WAVE, create all the Time blocks
+    if (createSlotDto.scheduleType === 'wave' && createSlotDto.startTimes) {
       const timePromises = createSlotDto.startTimes.map((time) => {
         const newTime = this.timeRepository.create({
           startTime: time,
           isAvailable: true,
           slot: newSlot,
-          capacity: createSlotDto.capacityPerSlot,
-          currentBookings: 0,
+          capacityPerSlot: createSlotDto.capacityPerSlot,
         });
         return this.timeRepository.save(newTime);
       });
-      savedTimes = await Promise.all(timePromises);
-    } else if (createSlotDto.scheduleType === ScheduleType.STREAM) {
-      if (
-        !createSlotDto.consultingStartTime ||
-        !createSlotDto.slotDuration ||
-        !createSlotDto.totalCapacity
-      ) {
-        throw new ConflictException(
-          'For STREAM scheduling, consultingStartTime, slotDuration, and totalCapacity are required.',
-        );
-      }
-      newSlot.consultingStartTime = createSlotDto.consultingStartTime;
-      newSlot.slotDuration = createSlotDto.slotDuration;
-      newSlot.capacity = createSlotDto.totalCapacity;
-      newSlot.currentBookings = 0;
-
-      await this.slotRepository.save(newSlot);
+      await Promise.all(timePromises);
     }
 
-    newSlot.times = savedTimes;
     return newSlot;
   }
 
-  async findAvailableSlotsForDoctor(
-    doctorId: string,
-    date: string,
-  ): Promise<Slot[]> {
+  async findAvailableSlotsForDoctor(doctorId: string, date: string) {
     const slots = await this.slotRepository.find({
       where: {
         doctor: { id: doctorId },
-
-        date: Raw((alias) => `${alias} = :date`, { date: date }),
+        date: new Date(date),
       },
-      relations: ['times'],
     });
 
     if (!slots || slots.length === 0) {
       throw new NotFoundException(
-        'No slots found for this doctor on this date.',
+        'No availability found for this doctor on this date.',
       );
     }
 
-    const availableSlots = slots
-      .map((slot) => {
-        if (slot.scheduleType === ScheduleType.WAVE) {
-          slot.times = slot.times.filter(
-            (time) => time.isAvailable && time.currentBookings < time.capacity,
-          );
+    const response: any[] = [];
+    for (const slot of slots) {
+      if (slot.scheduleType === 'stream') {
+        if (slot.currentBookings < slot.totalCapacity) {
+          response.push({
+            scheduleType: 'stream',
+            slot: slot,
+          });
         }
-        return slot;
-      })
-      .filter((slot) => {
-        if (slot.scheduleType === ScheduleType.WAVE) {
-          return slot.times.length > 0;
-        }
-        if (slot.scheduleType === ScheduleType.STREAM) {
-          return slot.currentBookings < slot.capacity;
-        }
-        return false;
-      });
+      }
 
-    if (availableSlots.length === 0) {
+      if (slot.scheduleType === 'wave') {
+        const availableTimes = await this.timeRepository.find({
+          where: {
+            slot: { id: slot.id },
+            isAvailable: true,
+          },
+          order: {
+            startTime: 'ASC',
+          },
+        });
+
+        if (availableTimes.length > 0) {
+          response.push({
+            scheduleType: 'wave',
+            availableTimes: availableTimes,
+          });
+        }
+      }
+    }
+
+    if (response.length === 0) {
       throw new NotFoundException(
-        'No available slots found for this doctor on this date.',
+        'All slots for this doctor on this date are fully booked.',
       );
     }
 
-    return availableSlots;
+    return response;
   }
 
   findAll() {
@@ -142,5 +114,13 @@ export class SlotsService {
 
   findOne(id: string) {
     return `This action returns a #${id} slot`;
+  }
+
+  update(id: string, updateSlotDto: UpdateSlotDto) {
+    return `This action updates a #${id} slot`;
+  }
+
+  remove(id: string) {
+    return `This action removes a #${id} slot`;
   }
 }

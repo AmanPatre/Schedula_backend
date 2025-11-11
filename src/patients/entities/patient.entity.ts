@@ -5,7 +5,9 @@ import {
   Column,
   OneToOne,
   JoinColumn,
+  OneToMany,
 } from 'typeorm';
+import { Appointment } from 'src/appointments/entities/appointment.entity';
 
 @Entity('patients')
 export class Patient {
@@ -21,4 +23,7 @@ export class Patient {
 
   @Column()
   userId: string;
+
+  @OneToMany(() => Appointment, (appointment) => appointment.patient)
+  appointments: Appointment[];
 }

@@ -65,10 +65,10 @@ export class Slot {
   slotDuration: number;
 
   @Column({ type: 'int', default: 0 })
-  capacity: number;
-
-  @Column({ type: 'int', default: 0 })
   currentBookings: number;
+
+  @Column({ type: 'int', nullable: true })
+  totalCapacity: number;
 
   @ManyToOne(() => Doctor, (doctor) => doctor.slots)
   doctor: Doctor;

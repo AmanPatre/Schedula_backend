@@ -17,15 +17,11 @@ import { DoctorsService } from './doctors.service';
 import { CreateDoctorDto } from './dto/create-doctor.dto';
 import { UpdateDoctorDto } from './dto/update-doctor.dto';
 import { AuthGuard } from '@nestjs/passport';
-import { SlotsService } from 'src/slots/slots.service';
 
 @UseInterceptors(ClassSerializerInterceptor)
 @Controller('doctors')
 export class DoctorsController {
-  constructor(
-    private readonly doctorsService: DoctorsService,
-    private readonly slotsService: SlotsService,
-  ) {}
+  constructor(private readonly doctorsService: DoctorsService) {}
 
   @Post()
   @UseGuards(AuthGuard('jwt'))
@@ -42,18 +38,21 @@ export class DoctorsController {
   }
 
   @Get()
-  findAll(@Query('specialization') specialization?: string) {
+  findAll(@Query('specialization') specialization: string) {
     return this.doctorsService.findAll(specialization);
+  }
+
+  @Get(':id/available-slots')
+  getDoctorAvailability(
+    @Param('id') doctorId: string,
+    @Query('date') date: string,
+  ) {
+    return this.doctorsService.findAvailableSlotsForDoctor(doctorId, date);
   }
 
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.doctorsService.findOne(id);
-  }
-
-  @Get(':id/available-slots')
-  findAvailableSlots(@Param('id') id: string, @Query('date') date: string) {
-    return this.slotsService.findAvailableSlotsForDoctor(id, date);
   }
 
   @Patch(':id')
