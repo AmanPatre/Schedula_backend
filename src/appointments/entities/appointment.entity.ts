@@ -8,7 +8,9 @@ import {
   Column,
   ManyToOne,
   CreateDateColumn,
+  OneToMany,
 } from 'typeorm';
+import { RescheduleHistory } from './reschedule-history.entity';
 
 @Entity('appointments')
 export class Appointment {
@@ -33,4 +35,7 @@ export class Appointment {
 
   @ManyToOne(() => Time)
   time: Time;
+
+  @OneToMany(() => RescheduleHistory, (history) => history.appointment)
+  rescheduleHistory: RescheduleHistory[];
 }
