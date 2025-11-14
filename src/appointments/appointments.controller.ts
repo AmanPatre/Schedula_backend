@@ -16,6 +16,7 @@ import { AppointmentsService } from './appointments.service';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
 import { UpdateAppointmentDto } from './dto/update-appointment.dto';
 import { AuthGuard } from '@nestjs/passport';
+import { RescheduleAppointmentDto } from './dto/reschedule-appointment.dto';
 
 @UseInterceptors(ClassSerializerInterceptor)
 @Controller('appointments')
@@ -45,6 +46,20 @@ export class AppointmentsController {
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.appointmentsService.findOne(id);
+  }
+
+  @Patch('reschedule/:id')
+  @UseGuards(AuthGuard('jwt'))
+  reschedule(
+    @Param('id') id: string,
+    @Body() rescheduleAppointmentDto: RescheduleAppointmentDto,
+    @Req() req: any,
+  ) {
+    return this.appointmentsService.reschedule(
+      id,
+      rescheduleAppointmentDto,
+      req.user,
+    );
   }
 
   @Patch(':id')

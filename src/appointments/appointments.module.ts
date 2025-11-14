@@ -6,9 +6,18 @@ import { Appointment } from './entities/appointment.entity';
 import { Time } from 'src/times/entities/time.entity';
 import { Slot } from 'src/slots/entities/slot.entity';
 import { Patient } from 'src/patients/entities/patient.entity';
+import { RescheduleHistory } from './entities/reschedule-history.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Appointment, Time, Slot, Patient])],
+  imports: [
+    TypeOrmModule.forFeature([
+      Appointment,
+      Time,
+      Slot,
+      Patient,
+      RescheduleHistory,
+    ]),
+  ],
   controllers: [AppointmentsController],
   providers: [AppointmentsService],
 })

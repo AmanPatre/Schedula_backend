@@ -6,7 +6,6 @@ import {
   CreateDateColumn,
 } from 'typeorm';
 
-// This defines the "Role" for a user
 export enum UserRole {
   PATIENT = 'patient',
   DOCTOR = 'doctor',

@@ -3,6 +3,7 @@ import {
   NotFoundException,
   UnauthorizedException,
   ConflictException,
+  NotImplementedException,
 } from '@nestjs/common';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -12,7 +13,8 @@ import { Time } from 'src/times/entities/time.entity';
 import { ConfigService } from '@nestjs/config';
 import { Slot } from 'src/slots/entities/slot.entity';
 import { UpdateAppointmentDto } from './dto/update-appointment.dto';
-
+import { RescheduleAppointmentDto } from './dto/reschedule-appointment.dto';
+import { RescheduleHistory } from './entities/reschedule-history.entity';
 
 @Injectable()
 export class AppointmentsService {
@@ -24,6 +26,9 @@ export class AppointmentsService {
     @InjectRepository(Slot)
     private slotRepository: Repository<Slot>,
     private configService: ConfigService,
+
+    @InjectRepository(RescheduleHistory)
+    private rescheduleHistoryRepository: Repository<RescheduleHistory>,
   ) {}
 
   async create(
@@ -144,6 +149,14 @@ export class AppointmentsService {
     });
   }
 
+  async reschedule(
+    appointmentId: string,
+    rescheduleDto: RescheduleAppointmentDto,
+    user: any,
+  ): Promise<any> {
+    throw new NotImplementedException('Reschedule feature in next PR ');
+  }
+
   async remove(id: string): Promise<{ message: string }> {
     const appointment = await this.appointmentRepository.findOne({
       where: { id },
@@ -199,8 +212,6 @@ export class AppointmentsService {
 
     return this.remove(appointmentId);
   }
-
- 
 
   findAll() {
     return `This action returns all appointments`;
