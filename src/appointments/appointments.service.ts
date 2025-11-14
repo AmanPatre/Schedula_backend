@@ -154,7 +154,7 @@ export class AppointmentsService {
     rescheduleDto: RescheduleAppointmentDto,
     user: any,
   ): Promise<any> {
-    throw new NotImplementedException('Reschedule feature is coming soon.');
+    throw new NotImplementedException('Reschedule feature in next PR ');
   }
 
   async remove(id: string): Promise<{ message: string }> {
