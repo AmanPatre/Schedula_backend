@@ -11,7 +11,7 @@ import { Appointment } from './entities/appointment.entity';
 import { Repository } from 'typeorm';
 import { Time } from 'src/times/entities/time.entity';
 import { ConfigService } from '@nestjs/config';
-import { Slot } from 'src/slots/entities/slot.entity';
+import { Slot, ScheduleType } from 'src/slots/entities/slot.entity';
 import { UpdateAppointmentDto } from './dto/update-appointment.dto';
 import { RescheduleAppointmentDto } from './dto/reschedule-appointment.dto';
 import { RescheduleHistory } from './entities/reschedule-history.entity';
@@ -153,8 +153,124 @@ export class AppointmentsService {
     appointmentId: string,
     rescheduleDto: RescheduleAppointmentDto,
     user: any,
-  ): Promise<any> {
-    throw new NotImplementedException('Reschedule feature in next PR ');
+  ): Promise<Appointment> {
+    const appointment = await this.appointmentRepository.findOne({
+      where: { id: appointmentId },
+      relations: ['time', 'time.slot', 'patient', 'doctor'],
+    });
+
+    if (!appointment) {
+      throw new NotFoundException('Appointment not found');
+    }
+
+    if (appointment.patient.userId !== user.userId) {
+      throw new UnauthorizedException(
+        'You are not authorized to reschedule this appointment.',
+      );
+    }
+
+    const previousTime = appointment.time;
+    const previousScheduleType = appointment.scheduleType;
+
+    if (previousScheduleType === 'wave') {
+      const timeSlot = previousTime;
+      if (timeSlot) {
+        timeSlot.currentBookings -= 1;
+        timeSlot.isAvailable = true;
+        await this.timeRepository.save(timeSlot);
+      }
+    }
+    if (previousScheduleType === 'stream') {
+      const slot = previousTime.slot;
+      if (slot) {
+        slot.currentBookings -= 1;
+        await this.slotRepository.save(slot);
+      }
+    }
+
+    const { timeId, slotId } = rescheduleDto;
+    let newAppointmentTime: Time;
+    let newScheduleType: ScheduleType;
+
+    if (timeId) {
+      const timeSlot = await this.timeRepository.findOne({
+        where: { id: timeId },
+        relations: ['slot', 'slot.doctor'],
+      });
+      if (!timeSlot) {
+        throw new NotFoundException('New time slot not found');
+      }
+      if (
+        !timeSlot.isAvailable ||
+        timeSlot.currentBookings >= timeSlot.capacityPerSlot
+      ) {
+        throw new ConflictException(
+          'This time slot is not available or is full.',
+        );
+      }
+
+      timeSlot.currentBookings += 1;
+      if (timeSlot.currentBookings >= timeSlot.capacityPerSlot) {
+        timeSlot.isAvailable = false;
+      }
+      newAppointmentTime = await this.timeRepository.save(timeSlot);
+      newScheduleType = ScheduleType.WAVE;
+      appointment.doctor = timeSlot.slot.doctor;
+    } else if (slotId) {
+      const streamSlot = await this.slotRepository.findOne({
+        where: { id: slotId },
+        relations: ['doctor'],
+      });
+      if (!streamSlot) {
+        throw new NotFoundException('New stream slot not found');
+      }
+      if (streamSlot.currentBookings >= streamSlot.totalCapacity) {
+        throw new ConflictException('This stream slot is fully booked.');
+      }
+
+      const minutesToAdd = streamSlot.slotDuration * streamSlot.currentBookings;
+      const [hours, minutes] = streamSlot.consultingStartTime
+        .split(':')
+        .map(Number);
+      const newStartTime = new Date(0);
+      newStartTime.setHours(hours, minutes + minutesToAdd, 0, 0);
+
+      const newTime = this.timeRepository.create({
+        startTime: newStartTime.toTimeString().split(' ')[0],
+        isAvailable: false,
+        capacityPerSlot: 1,
+        currentBookings: 1,
+        slot: streamSlot,
+      });
+      newAppointmentTime = await this.timeRepository.save(newTime);
+      streamSlot.currentBookings += 1;
+      await this.slotRepository.save(streamSlot);
+      newScheduleType = ScheduleType.STREAM;
+      appointment.doctor = streamSlot.doctor;
+    } else {
+      throw new ConflictException(
+        'Either timeId (for Wave) or slotId (for Stream) must be provided.',
+      );
+    }
+
+    const historyEntry = this.rescheduleHistoryRepository.create({
+      appointment: appointment,
+      previousTime: previousTime,
+      newTime: newAppointmentTime,
+      reason: rescheduleDto.reason,
+    });
+    await this.rescheduleHistoryRepository.save(historyEntry);
+
+    appointment.time = newAppointmentTime;
+    appointment.scheduleType = newScheduleType;
+    const updatedAppointment =
+      await this.appointmentRepository.save(appointment);
+
+    if (previousScheduleType === 'stream' && previousTime) {
+      await this.timeRepository.remove(previousTime);
+    }
+
+    return updatedAppointment;
   }
 
   async remove(id: string): Promise<{ message: string }> {

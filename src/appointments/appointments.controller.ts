@@ -17,6 +17,7 @@ import { CreateAppointmentDto } from './dto/create-appointment.dto';
 import { UpdateAppointmentDto } from './dto/update-appointment.dto';
 import { AuthGuard } from '@nestjs/passport';
 import { RescheduleAppointmentDto } from './dto/reschedule-appointment.dto';
+import { Appointment } from './entities/appointment.entity';
 
 @UseInterceptors(ClassSerializerInterceptor)
 @Controller('appointments')
@@ -54,7 +55,7 @@ export class AppointmentsController {
     @Param('id') id: string,
     @Body() rescheduleAppointmentDto: RescheduleAppointmentDto,
     @Req() req: any,
-  ) {
+  ): Promise<Appointment> {
     return this.appointmentsService.reschedule(
       id,
       rescheduleAppointmentDto,
