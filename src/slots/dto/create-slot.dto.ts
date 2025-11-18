@@ -1,10 +1,11 @@
 import { DayOfWeek, ScheduleType, Session } from '../entities/slot.entity';
 
 export class CreateSlotDto {
-  date: Date;
+  startDate: Date;
+  endDate: Date;
   session: Session;
   scheduleType: ScheduleType;
-  dayOfWeek: DayOfWeek;
+  daysOfWeek: DayOfWeek[];
 
   // Wave properties
   startTimes?: string[];
