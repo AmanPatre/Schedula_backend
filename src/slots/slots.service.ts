@@ -28,7 +28,7 @@ export class SlotsService {
     const loopDate = new Date(startDate);
     const stopDate = new Date(endDate);
 
-    const createdSlots: Slot[] = []; // <-- THIS IS THE FIX
+    const createdSlots: Slot[] = [];
 
     while (loopDate <= stopDate) {
       const currentDayOfWeek = loopDate.getDay() as DayOfWeek;
