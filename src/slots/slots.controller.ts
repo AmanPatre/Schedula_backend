@@ -5,6 +5,8 @@ import {
   UseGuards,
   Req,
   ConflictException,
+  Delete,
+  Param,
 } from '@nestjs/common';
 import { SlotsService } from './slots.service';
 import { CreateSlotDto } from './dto/create-slot.dto';
@@ -24,5 +26,15 @@ export class SlotsController {
     }
 
     return this.slotsService.create(createSlotDto, user.userId);
+  }
+
+  @Delete(':id')
+  @UseGuards(AuthGuard('jwt'))
+  remove(@Param('id') id: string, @Req() req: any) {
+    const user = req.user;
+    if (user.role !== 'doctor') {
+      throw new ConflictException('Only doctors can delete availability.');
+    }
+    return this.slotsService.remove(id);
   }
 }

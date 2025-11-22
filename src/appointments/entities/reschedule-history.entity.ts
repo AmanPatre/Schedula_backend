@@ -4,6 +4,7 @@ import {
   Column,
   ManyToOne,
   CreateDateColumn,
+  JoinColumn,
 } from 'typeorm';
 import { Appointment } from './appointment.entity';
 import { Time } from 'src/times/entities/time.entity';
@@ -16,7 +17,8 @@ export class RescheduleHistory {
   @ManyToOne(() => Appointment, (appointment) => appointment.rescheduleHistory)
   appointment: Appointment;
 
-  @ManyToOne(() => Time)
+  @ManyToOne(() => Time, { onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'previousTimeId' })
   previousTime: Time;
 
   @ManyToOne(() => Time)
