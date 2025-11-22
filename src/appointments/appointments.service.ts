@@ -172,19 +172,21 @@ export class AppointmentsService {
     const previousTime = appointment.time;
     const previousScheduleType = appointment.scheduleType;
 
-    if (previousScheduleType === 'wave') {
-      const timeSlot = previousTime;
-      if (timeSlot) {
-        timeSlot.currentBookings -= 1;
-        timeSlot.isAvailable = true;
-        await this.timeRepository.save(timeSlot);
+    if (previousTime) {
+      if (previousScheduleType === 'wave') {
+        const timeSlot = previousTime;
+        if (timeSlot && timeSlot.currentBookings > 0) {
+          timeSlot.currentBookings -= 1;
+          timeSlot.isAvailable = true;
+          await this.timeRepository.save(timeSlot);
+        }
       }
-    }
-    if (previousScheduleType === 'stream') {
-      const slot = previousTime.slot;
-      if (slot) {
-        slot.currentBookings -= 1;
-        await this.slotRepository.save(slot);
+      if (previousScheduleType === 'stream') {
+        const slot = previousTime.slot;
+        if (slot && slot.currentBookings > 0) {
+          slot.currentBookings -= 1;
+          await this.slotRepository.save(slot);
+        }
       }
     }
 
@@ -226,6 +228,12 @@ export class AppointmentsService {
       }
       if (streamSlot.currentBookings >= streamSlot.totalCapacity) {
         throw new ConflictException('This stream slot is fully booked.');
+      }
+
+      if (!streamSlot.consultingStartTime) {
+        throw new ConflictException(
+          'Target slot has no start time configuration.',
+        );
       }
 
       const minutesToAdd = streamSlot.slotDuration * streamSlot.currentBookings;

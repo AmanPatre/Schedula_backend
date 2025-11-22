@@ -159,6 +159,7 @@ export class SlotsService {
         if (availableTimes.length > 0) {
           response.push({
             scheduleType: 'wave',
+            slotId: slot.id,
             availableTimes: availableTimes,
           });
         }
@@ -174,6 +175,42 @@ export class SlotsService {
     return response;
   }
 
+  async remove(id: string) {
+    const slot = await this.slotRepository.findOne({
+      where: { id },
+      relations: ['times'],
+    });
+
+    if (!slot) {
+      throw new NotFoundException('Slot not found');
+    }
+
+    let hasBookings = false;
+
+    if (slot.scheduleType === 'stream') {
+      if (slot.currentBookings > 0) {
+        hasBookings = true;
+      }
+    } else if (slot.scheduleType === 'wave') {
+      if (slot.times && slot.times.some((t) => t.currentBookings > 0)) {
+        hasBookings = true;
+      }
+    }
+
+    if (hasBookings) {
+      throw new ConflictException(
+        'Cannot delete this slot because it has active appointments. Please reschedule them first.',
+      );
+    }
+
+    if (slot.times && slot.times.length > 0) {
+      await this.timeRepository.remove(slot.times);
+    }
+
+    await this.slotRepository.remove(slot);
+    return { message: 'Slot successfully deleted' };
+  }
+
   findAll() {
     return `This action returns all slots`;
   }
@@ -184,9 +221,5 @@ export class SlotsService {
 
   update(id: string, updateSlotDto: UpdateSlotDto) {
     return `This action updates a #${id} slot`;
-  }
-
-  remove(id: string) {
-    return `This action removes a #${id} slot`;
   }
 }

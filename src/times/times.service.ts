@@ -1,26 +1,46 @@
-import { Injectable } from '@nestjs/common';
-import { CreateTimeDto } from './dto/create-time.dto';
-import { UpdateTimeDto } from './dto/update-time.dto';
+import {
+  Injectable,
+  NotFoundException,
+  ConflictException,
+} from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { Time } from './entities/time.entity';
 
 @Injectable()
 export class TimesService {
-  create(createTimeDto: CreateTimeDto) {
-    return 'This action adds a new time';
+  constructor(
+    @InjectRepository(Time)
+    private timeRepository: Repository<Time>,
+  ) {}
+
+  async remove(id: string) {
+    const time = await this.timeRepository.findOne({ where: { id } });
+
+    if (!time) {
+      throw new NotFoundException('Time slot not found');
+    }
+
+    if (time.currentBookings > 0) {
+      throw new ConflictException(
+        'Cannot delete this time because it has active appointments. Please reschedule them first.',
+      );
+    }
+
+    await this.timeRepository.remove(time);
+    return { message: 'Time slot successfully deleted' };
   }
 
+  create(dto: any) {
+    return 'not implemented';
+  }
   findAll() {
-    return `This action returns all times`;
+    return 'not implemented';
   }
-
   findOne(id: number) {
-    return `This action returns a #${id} time`;
+    return 'not implemented';
   }
-
-  update(id: number, updateTimeDto: UpdateTimeDto) {
-    return `This action updates a #${id} time`;
-  }
-
-  remove(id: number) {
-    return `This action removes a #${id} time`;
+  update(id: number, dto: any) {
+    return 'not implemented';
   }
 }
