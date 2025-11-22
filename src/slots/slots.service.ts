@@ -8,9 +8,10 @@ import { CreateSlotDto } from './dto/create-slot.dto';
 import { UpdateSlotDto } from './dto/update-slot.dto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Slot, DayOfWeek, ScheduleType } from './entities/slot.entity';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { Doctor } from 'src/doctors/entities/doctor.entity';
 import { Time } from 'src/times/entities/time.entity';
+import { Appointment } from 'src/appointments/entities/appointment.entity';
 
 @Injectable()
 export class SlotsService {
@@ -21,6 +22,8 @@ export class SlotsService {
     private doctorRepository: Repository<Doctor>,
     @InjectRepository(Time)
     private timeRepository: Repository<Time>,
+    @InjectRepository(Appointment)
+    private appointmentRepository: Repository<Appointment>,
   ) {}
 
   async create(createSlotDto: CreateSlotDto, userId: string): Promise<any> {
@@ -175,6 +178,185 @@ export class SlotsService {
     return response;
   }
 
+  async update(id: string, updateSlotDto: UpdateSlotDto) {
+    const slot = await this.slotRepository.findOne({
+      where: { id },
+      relations: ['times', 'times.appointments', 'doctor'],
+    });
+
+    if (!slot) {
+      throw new NotFoundException('Slot not found');
+    }
+
+    const affectedAppointments = await this.getAffectedAppointments(
+      slot,
+      updateSlotDto,
+    );
+
+    if (affectedAppointments.length > 0) {
+      const unresolvedAppointments = await this.resolveConflicts(
+        affectedAppointments,
+        slot,
+      );
+
+      if (unresolvedAppointments.length > 0) {
+        throw new ConflictException(
+          `Update failed. ${unresolvedAppointments.length} patients could not be automatically moved. Please manually reschedule them.`,
+        );
+      }
+    }
+
+    Object.assign(slot, updateSlotDto);
+
+    if (
+      slot.scheduleType === 'wave' &&
+      updateSlotDto.capacityPerSlot !== undefined
+    ) {
+      if (slot.times) {
+        for (const time of slot.times) {
+          time.capacityPerSlot = updateSlotDto.capacityPerSlot;
+          await this.timeRepository.save(time);
+        }
+      }
+    }
+
+    return this.slotRepository.save(slot);
+  }
+
+  private async getAffectedAppointments(
+    slot: Slot,
+    dto: UpdateSlotDto,
+  ): Promise<Appointment[]> {
+    let affected: Appointment[] = [];
+
+    if (
+      slot.scheduleType === 'stream' &&
+      dto.totalCapacity !== undefined &&
+      dto.totalCapacity < slot.currentBookings
+    ) {
+      const bookings = await this.appointmentRepository.find({
+        where: { time: { slot: { id: slot.id } } },
+        order: { createdAt: 'ASC' },
+        relations: ['time', 'time.slot'],
+      });
+
+      const excessCount = slot.currentBookings - dto.totalCapacity;
+      affected = bookings.slice(-excessCount);
+    }
+
+    if (slot.scheduleType === 'wave' && dto.capacityPerSlot !== undefined) {
+      for (const time of slot.times) {
+        if (time.currentBookings > dto.capacityPerSlot) {
+          const timeBookings = await this.appointmentRepository.find({
+            where: { time: { id: time.id } },
+            order: { createdAt: 'ASC' },
+            relations: ['time'],
+          });
+          const excess = time.currentBookings - dto.capacityPerSlot;
+          affected.push(...timeBookings.slice(-excess));
+        }
+      }
+    }
+
+    if (
+      (dto.consultingStartTime &&
+        dto.consultingStartTime !== slot.consultingStartTime) ||
+      (dto.slotDuration && dto.slotDuration !== slot.slotDuration)
+    ) {
+      const allBookings = await this.appointmentRepository.find({
+        where: { time: { slot: { id: slot.id } } },
+        relations: ['time', 'time.slot'],
+      });
+      affected = allBookings;
+    }
+
+    return affected;
+  }
+
+  private async resolveConflicts(
+    appointments: Appointment[],
+    originalSlot: Slot,
+  ): Promise<Appointment[]> {
+    const unresolved: Appointment[] = [];
+
+    const sameDaySlots = await this.slotRepository.find({
+      where: {
+        doctor: { id: originalSlot.doctor.id },
+        date: originalSlot.date,
+        id: In([originalSlot.id]) === false ? undefined : undefined,
+      },
+      relations: ['times'],
+    });
+
+    const targetSlots = sameDaySlots.filter((s) => s.id !== originalSlot.id);
+
+    for (const appointment of appointments) {
+      let isResolved = false;
+
+      for (const targetSlot of targetSlots) {
+        if (
+          targetSlot.scheduleType === 'stream' &&
+          targetSlot.currentBookings < targetSlot.totalCapacity
+        ) {
+          const minutesToAdd =
+            targetSlot.slotDuration * targetSlot.currentBookings;
+          const [h, m] = targetSlot.consultingStartTime.split(':').map(Number);
+          const newStart = new Date(originalSlot.date);
+          newStart.setHours(h, m + minutesToAdd);
+          const timeString = newStart.toTimeString().split(' ')[0];
+
+          const newTime = this.timeRepository.create({
+            startTime: timeString,
+            isAvailable: false,
+            capacityPerSlot: 1,
+            currentBookings: 1,
+            slot: targetSlot,
+          });
+          await this.timeRepository.save(newTime);
+
+          appointment.time = newTime;
+          appointment.scheduleType = ScheduleType.STREAM;
+          await this.appointmentRepository.save(appointment);
+
+          targetSlot.currentBookings += 1;
+          await this.slotRepository.save(targetSlot);
+
+          isResolved = true;
+          break;
+        }
+
+        if (targetSlot.scheduleType === 'wave') {
+          const availableTime = targetSlot.times.find(
+            (t) => t.currentBookings < t.capacityPerSlot,
+          );
+
+          if (availableTime) {
+            appointment.time = availableTime;
+            appointment.scheduleType = ScheduleType.WAVE;
+            await this.appointmentRepository.save(appointment);
+
+            availableTime.currentBookings += 1;
+            if (
+              availableTime.currentBookings >= availableTime.capacityPerSlot
+            ) {
+              availableTime.isAvailable = false;
+            }
+            await this.timeRepository.save(availableTime);
+
+            isResolved = true;
+            break;
+          }
+        }
+      }
+
+      if (!isResolved) {
+        unresolved.push(appointment);
+      }
+    }
+
+    return unresolved;
+  }
+
   async remove(id: string) {
     const slot = await this.slotRepository.findOne({
       where: { id },
@@ -217,9 +399,5 @@ export class SlotsService {
 
   findOne(id: string) {
     return `This action returns a #${id} slot`;
-  }
-
-  update(id: string, updateSlotDto: UpdateSlotDto) {
-    return `This action updates a #${id} slot`;
   }
 }

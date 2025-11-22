@@ -7,9 +7,11 @@ import {
   ConflictException,
   Delete,
   Param,
+  Patch,
 } from '@nestjs/common';
 import { SlotsService } from './slots.service';
 import { CreateSlotDto } from './dto/create-slot.dto';
+import { UpdateSlotDto } from './dto/update-slot.dto';
 import { AuthGuard } from '@nestjs/passport';
 
 @Controller('slots')
@@ -26,6 +28,20 @@ export class SlotsController {
     }
 
     return this.slotsService.create(createSlotDto, user.userId);
+  }
+
+  @Patch(':id')
+  @UseGuards(AuthGuard('jwt'))
+  update(
+    @Param('id') id: string,
+    @Body() updateSlotDto: UpdateSlotDto,
+    @Req() req: any,
+  ) {
+    const user = req.user;
+    if (user.role !== 'doctor') {
+      throw new ConflictException('Only doctors can update availability.');
+    }
+    return this.slotsService.update(id, updateSlotDto);
   }
 
   @Delete(':id')

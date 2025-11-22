@@ -1,5 +1,12 @@
 import { Slot } from 'src/slots/entities/slot.entity';
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  ManyToOne,
+  OneToMany,
+} from 'typeorm';
+import { Appointment } from 'src/appointments/entities/appointment.entity'; // <--- Import this
 
 @Entity('times')
 export class Time {
@@ -20,4 +27,7 @@ export class Time {
 
   @ManyToOne(() => Slot, (slot) => slot.times)
   slot: Slot;
+
+  @OneToMany(() => Appointment, (appointment) => appointment.time)
+  appointments: Appointment[];
 }
