@@ -44,6 +44,24 @@ export class SlotsController {
     return this.slotsService.update(id, updateSlotDto);
   }
 
+  @Patch('time/:timeId')
+  @UseGuards(AuthGuard('jwt'))
+  updateTimeSlot(
+    @Param('timeId') timeId: string,
+    @Body() body: { capacityPerSlot: number },
+    @Req() req: any,
+  ) {
+    const user = req.user;
+    if (user.role !== 'doctor') {
+      throw new ConflictException('Only doctors can update availability.');
+    }
+    if (body.capacityPerSlot === undefined || body.capacityPerSlot < 0) {
+      throw new ConflictException('Invalid capacity provided.');
+    }
+
+    return this.slotsService.updateTimeSlot(timeId, body.capacityPerSlot);
+  }
+
   @Delete(':id')
   @UseGuards(AuthGuard('jwt'))
   remove(@Param('id') id: string, @Req() req: any) {

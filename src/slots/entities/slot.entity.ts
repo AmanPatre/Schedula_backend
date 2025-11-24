@@ -1,14 +1,15 @@
-import { Doctor } from 'src/doctors/entities/doctor.entity';
-import { Time } from 'src/times/entities/time.entity';
 import {
   Entity,
   PrimaryGeneratedColumn,
   Column,
   ManyToOne,
   OneToMany,
+  Unique,
 } from 'typeorm';
+import { Doctor } from 'src/doctors/entities/doctor.entity';
+import { Time } from 'src/times/entities/time.entity';
 
-export enum Session {
+export enum SessionType {
   MORNING = 'morning',
   AFTERNOON = 'afternoon',
   EVENING = 'evening',
@@ -30,6 +31,7 @@ export enum DayOfWeek {
 }
 
 @Entity('slots')
+@Unique(['doctor', 'date', 'session'])
 export class Slot {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -39,40 +41,40 @@ export class Slot {
 
   @Column({
     type: 'enum',
-    enum: Session,
-    nullable: true,
+    enum: SessionType,
   })
-  session: Session;
+  session: SessionType;
 
   @Column({
     type: 'enum',
     enum: ScheduleType,
-    nullable: true,
   })
   scheduleType: ScheduleType;
 
   @Column({
     type: 'enum',
     enum: DayOfWeek,
-    nullable: true,
   })
   dayOfWeek: DayOfWeek;
 
   @Column({ type: 'time', nullable: true })
   consultingStartTime: string;
 
+  @Column({ type: 'time', nullable: true })
+  consultingEndTime: string;
+
   @Column({ type: 'int', nullable: true })
   slotDuration: number;
 
   @Column({ type: 'int', default: 0 })
-  currentBookings: number;
-
-  @Column({ type: 'int', nullable: true })
   totalCapacity: number;
+
+  @Column({ type: 'int', default: 0 })
+  currentBookings: number;
 
   @ManyToOne(() => Doctor, (doctor) => doctor.slots)
   doctor: Doctor;
 
-  @OneToMany(() => Time, (time) => time.slot)
+  @OneToMany(() => Time, (time) => time.slot, { cascade: true })
   times: Time[];
 }

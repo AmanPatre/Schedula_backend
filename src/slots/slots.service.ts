@@ -8,7 +8,7 @@ import { CreateSlotDto } from './dto/create-slot.dto';
 import { UpdateSlotDto } from './dto/update-slot.dto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Slot, DayOfWeek, ScheduleType } from './entities/slot.entity';
-import { In, Repository } from 'typeorm';
+import { In, Repository, Between, Not } from 'typeorm';
 import { Doctor } from 'src/doctors/entities/doctor.entity';
 import { Time } from 'src/times/entities/time.entity';
 import { Appointment } from 'src/appointments/entities/appointment.entity';
@@ -56,6 +56,7 @@ export class SlotsService {
       );
     }
 
+    // Keep existing check for startTimes presence
     if (
       createSlotDto.scheduleType === ScheduleType.WAVE &&
       (!createSlotDto.startTimes || createSlotDto.startTimes.length === 0)
@@ -64,6 +65,37 @@ export class SlotsService {
         'For Wave scheduling, you must provide at least one start time.',
       );
     }
+
+    // vvv NEW VALIDATION BLOCK vvv
+    // Ensure startTimes fall within the new consultingStartTime/EndTime boundaries
+    if (createSlotDto.scheduleType === ScheduleType.WAVE) {
+      const { consultingStartTime, consultingEndTime, startTimes } =
+        createSlotDto;
+
+      if (!consultingStartTime || !consultingEndTime) {
+        throw new BadRequestException(
+          'Wave schedules require both start and end time boundaries.',
+        );
+      }
+      if (consultingStartTime >= consultingEndTime) {
+        throw new BadRequestException(
+          'Session start time must be before end time.',
+        );
+      }
+
+      for (const specificTime of startTimes) {
+        // String comparison works correctly for HH:MM:SS format
+        if (
+          specificTime < consultingStartTime ||
+          specificTime >= consultingEndTime
+        ) {
+          throw new BadRequestException(
+            `Invalid start time list: '${specificTime}' is outside the session boundaries (${consultingStartTime} - ${consultingEndTime}).`,
+          );
+        }
+      }
+    }
+    // ^^^ END NEW VALIDATION BLOCK ^^^
 
     const loopDate = new Date(start);
     const createdSlots: Slot[] = [];
@@ -92,13 +124,17 @@ export class SlotsService {
           session: createSlotDto.session,
           scheduleType: createSlotDto.scheduleType,
           dayOfWeek: currentDayOfWeek,
+          // vvv Save new boundary fields vvv
           consultingStartTime: createSlotDto.consultingStartTime,
+          consultingEndTime: createSlotDto.consultingEndTime,
+          // ^^^
           slotDuration: createSlotDto.slotDuration,
           totalCapacity: createSlotDto.totalCapacity,
         });
         await this.slotRepository.save(newSlot);
         createdSlots.push(newSlot);
 
+        // vvv EXISTING LOGIC REMAINS UNTOUCHED vvv
         if (
           createSlotDto.scheduleType === ScheduleType.WAVE &&
           createSlotDto.startTimes
@@ -114,6 +150,7 @@ export class SlotsService {
           });
           await Promise.all(timePromises);
         }
+        // ^^^
       }
       loopDate.setDate(loopDate.getDate() + 1);
     }
@@ -223,6 +260,53 @@ export class SlotsService {
     return this.slotRepository.save(slot);
   }
 
+  async updateTimeSlot(timeId: string, newCapacity: number) {
+    const timeSlot = await this.timeRepository.findOne({
+      where: { id: timeId },
+      relations: ['slot', 'slot.times'],
+    });
+
+    if (!timeSlot) {
+      throw new NotFoundException('Time slot not found');
+    }
+
+    if (timeSlot.slot.scheduleType !== ScheduleType.WAVE) {
+      throw new BadRequestException(
+        'This endpoint is only for Wave schedules.',
+      );
+    }
+
+    timeSlot.slot.times.sort((a, b) => a.startTime.localeCompare(b.startTime));
+
+    if (newCapacity < timeSlot.currentBookings) {
+      const appointments = await this.appointmentRepository.find({
+        where: { time: { id: timeId } },
+        order: { createdAt: 'ASC' },
+      });
+
+      const excessCount = timeSlot.currentBookings - newCapacity;
+      const appointmentsToMove = appointments.slice(-excessCount);
+
+      const unresolved = await this.cascadingWaveMove(
+        appointmentsToMove,
+        timeSlot,
+      );
+
+      if (unresolved.length > 0) {
+        throw new ConflictException(
+          `Update failed. ${unresolved.length} patients could not be moved to the next available time slot in this session.`,
+        );
+      }
+
+      timeSlot.currentBookings -= appointmentsToMove.length;
+    }
+
+    timeSlot.capacityPerSlot = newCapacity;
+    timeSlot.isAvailable = timeSlot.currentBookings < timeSlot.capacityPerSlot;
+
+    return this.timeRepository.save(timeSlot);
+  }
+
   private async getAffectedAppointments(
     slot: Slot,
     dto: UpdateSlotDto,
@@ -279,16 +363,22 @@ export class SlotsService {
   ): Promise<Appointment[]> {
     const unresolved: Appointment[] = [];
 
-    const sameDaySlots = await this.slotRepository.find({
+    const startDate = new Date(originalSlot.date);
+    const endDate = new Date(startDate);
+    endDate.setDate(startDate.getDate() + 7);
+
+    const targetSlots = await this.slotRepository.find({
       where: {
         doctor: { id: originalSlot.doctor.id },
-        date: originalSlot.date,
-        id: In([originalSlot.id]) === false ? undefined : undefined,
+        date: Between(startDate, endDate),
+        id: Not(originalSlot.id),
+      },
+      order: {
+        date: 'ASC',
+        consultingStartTime: 'ASC',
       },
       relations: ['times'],
     });
-
-    const targetSlots = sameDaySlots.filter((s) => s.id !== originalSlot.id);
 
     for (const appointment of appointments) {
       let isResolved = false;
@@ -300,8 +390,10 @@ export class SlotsService {
         ) {
           const minutesToAdd =
             targetSlot.slotDuration * targetSlot.currentBookings;
+          if (!targetSlot.consultingStartTime) continue;
+
           const [h, m] = targetSlot.consultingStartTime.split(':').map(Number);
-          const newStart = new Date(originalSlot.date);
+          const newStart = new Date(targetSlot.date);
           newStart.setHours(h, m + minutesToAdd);
           const timeString = newStart.toTimeString().split(' ')[0];
 
@@ -320,6 +412,8 @@ export class SlotsService {
 
           targetSlot.currentBookings += 1;
           await this.slotRepository.save(targetSlot);
+
+          originalSlot.currentBookings -= 1;
 
           isResolved = true;
           break;
@@ -343,6 +437,8 @@ export class SlotsService {
             }
             await this.timeRepository.save(availableTime);
 
+            originalSlot.currentBookings -= 1;
+
             isResolved = true;
             break;
           }
@@ -357,32 +453,70 @@ export class SlotsService {
     return unresolved;
   }
 
+  private async cascadingWaveMove(
+    appointments: Appointment[],
+    sourceTimeSlot: Time,
+  ): Promise<Appointment[]> {
+    const unresolved: Appointment[] = [];
+    const allTimes = sourceTimeSlot.slot.times;
+
+    const sourceIndex = allTimes.findIndex((t) => t.id === sourceTimeSlot.id);
+
+    if (sourceIndex === -1 || sourceIndex === allTimes.length - 1) {
+      return appointments;
+    }
+
+    for (const appointment of appointments) {
+      let isResolved = false;
+
+      for (let i = sourceIndex + 1; i < allTimes.length; i++) {
+        const targetSlot = allTimes[i];
+
+        if (targetSlot.currentBookings < targetSlot.capacityPerSlot) {
+          appointment.time = targetSlot;
+          await this.appointmentRepository.save(appointment);
+
+          targetSlot.currentBookings += 1;
+          targetSlot.isAvailable =
+            targetSlot.currentBookings < targetSlot.capacityPerSlot;
+          await this.timeRepository.save(targetSlot);
+
+          isResolved = true;
+          break;
+        }
+      }
+
+      if (!isResolved) {
+        unresolved.push(appointment);
+      }
+    }
+
+    return unresolved;
+  }
+
   async remove(id: string) {
     const slot = await this.slotRepository.findOne({
       where: { id },
-      relations: ['times'],
+      relations: ['times', 'times.appointments', 'doctor'],
     });
 
     if (!slot) {
       throw new NotFoundException('Slot not found');
     }
 
-    let hasBookings = false;
+    const appointmentsToMove = await this.appointmentRepository.find({
+      where: { time: { slot: { id: slot.id } } },
+      relations: ['time', 'time.slot', 'patient', 'doctor'],
+    });
 
-    if (slot.scheduleType === 'stream') {
-      if (slot.currentBookings > 0) {
-        hasBookings = true;
-      }
-    } else if (slot.scheduleType === 'wave') {
-      if (slot.times && slot.times.some((t) => t.currentBookings > 0)) {
-        hasBookings = true;
-      }
-    }
+    if (appointmentsToMove.length > 0) {
+      const unresolved = await this.resolveConflicts(appointmentsToMove, slot);
 
-    if (hasBookings) {
-      throw new ConflictException(
-        'Cannot delete this slot because it has active appointments. Please reschedule them first.',
-      );
+      if (unresolved.length > 0) {
+        throw new ConflictException(
+          `Cannot delete slot. ${unresolved.length} patients could not be automatically moved. Please manually reschedule them first.`,
+        );
+      }
     }
 
     if (slot.times && slot.times.length > 0) {
@@ -390,7 +524,7 @@ export class SlotsService {
     }
 
     await this.slotRepository.remove(slot);
-    return { message: 'Slot successfully deleted' };
+    return { message: 'Slot successfully deleted and patients moved.' };
   }
 
   findAll() {
