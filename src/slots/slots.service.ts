@@ -28,8 +28,9 @@ export class SlotsService {
 
   async create(createSlotDto: CreateSlotDto, userId: string): Promise<any> {
     const doctor = await this.doctorRepository.findOne({ where: { userId } });
-    if (!doctor)
+    if (!doctor) {
       throw new NotFoundException('Doctor profile not found for this user.');
+    }
 
     const { startDate, endDate, daysOfWeek } = createSlotDto;
     const start = new Date(startDate);
@@ -37,19 +38,23 @@ export class SlotsService {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    if (start < today)
+    if (start < today) {
       throw new BadRequestException(
         'You cannot set availability for past dates.',
       );
-    if (end < start)
+    }
+
+    if (end < start) {
       throw new BadRequestException('End date cannot be before start date.');
+    }
 
     const sixMonthsLater = new Date(start);
     sixMonthsLater.setMonth(sixMonthsLater.getMonth() + 6);
-    if (end > sixMonthsLater)
+    if (end > sixMonthsLater) {
       throw new BadRequestException(
         'You can only set availability for up to 6 months in advance.',
       );
+    }
 
     if (
       createSlotDto.scheduleType === ScheduleType.WAVE &&
@@ -63,14 +68,17 @@ export class SlotsService {
     if (createSlotDto.scheduleType === ScheduleType.WAVE) {
       const { consultingStartTime, consultingEndTime, startTimes } =
         createSlotDto;
-      if (!consultingStartTime || !consultingEndTime)
+
+      if (!consultingStartTime || !consultingEndTime) {
         throw new BadRequestException(
           'Wave schedules require both start and end time boundaries.',
         );
-      if (consultingStartTime >= consultingEndTime)
+      }
+      if (consultingStartTime >= consultingEndTime) {
         throw new BadRequestException(
           'Session start time must be before end time.',
         );
+      }
 
       for (const specificTime of startTimes) {
         if (
@@ -145,8 +153,6 @@ export class SlotsService {
   }
 
   async findAvailableSlotsForDoctor(doctorId: string, date: string) {
-    console.log('findAvailableSlotsForDoctor() called for doctorId:', doctorId, 'date:', date);
-
     const slots = await this.slotRepository.find({
       where: {
         doctor: { id: doctorId },
@@ -154,10 +160,11 @@ export class SlotsService {
       },
     });
 
-    if (!slots || slots.length === 0)
+    if (!slots || slots.length === 0) {
       throw new NotFoundException(
         'No availability found for this doctor on this date.',
       );
+    }
 
     const response: any[] = [];
     for (const slot of slots) {
@@ -165,7 +172,7 @@ export class SlotsService {
         if (slot.currentBookings < slot.totalCapacity) {
           response.push({
             scheduleType: 'stream',
-            slot,
+            slot: slot,
           });
         }
       }
@@ -176,25 +183,26 @@ export class SlotsService {
             slot: { id: slot.id },
             isAvailable: true,
           },
-          order: { startTime: 'ASC' },
+          order: {
+            startTime: 'ASC',
+          },
         });
 
         if (availableTimes.length > 0) {
           response.push({
             scheduleType: 'wave',
             slotId: slot.id,
-            session: slot.session,
-            date: slot.date,
-            availableTimes,
+            availableTimes: availableTimes,
           });
         }
       }
     }
 
-    if (response.length === 0)
+    if (response.length === 0) {
       throw new NotFoundException(
         'All slots for this doctor on this date are fully booked.',
       );
+    }
 
     return response;
   }
@@ -205,7 +213,9 @@ export class SlotsService {
       relations: ['times', 'times.appointments', 'doctor'],
     });
 
-    if (!slot) throw new NotFoundException('Slot not found');
+    if (!slot) {
+      throw new NotFoundException('Slot not found');
+    }
 
     const affectedAppointments = await this.getAffectedAppointments(
       slot,
@@ -217,6 +227,7 @@ export class SlotsService {
         affectedAppointments,
         slot,
       );
+
       if (unresolvedAppointments.length > 0) {
         throw new ConflictException(
           `Update failed. ${unresolvedAppointments.length} patients falling outside the new boundaries could not be automatically moved.`,
@@ -228,6 +239,7 @@ export class SlotsService {
       const timesToDelete = slot.times.filter(
         (t) => (t as any)._toBeDeleted === true,
       );
+
       if (timesToDelete.length > 0) {
         const emptyTimesToDelete = timesToDelete.filter(
           (t) => t.appointments.length === 0,
@@ -264,11 +276,15 @@ export class SlotsService {
       relations: ['slot', 'slot.times'],
     });
 
-    if (!timeSlot) throw new NotFoundException('Time slot not found');
-    if (timeSlot.slot.scheduleType !== ScheduleType.WAVE)
+    if (!timeSlot) {
+      throw new NotFoundException('Time slot not found');
+    }
+
+    if (timeSlot.slot.scheduleType !== ScheduleType.WAVE) {
       throw new BadRequestException(
         'This endpoint is only for Wave schedules.',
       );
+    }
 
     timeSlot.slot.times.sort((a, b) => a.startTime.localeCompare(b.startTime));
 
@@ -341,7 +357,25 @@ export class SlotsService {
       newEndTimeStr !== slot.consultingEndTime;
     const isDurationChange = newDuration !== slot.slotDuration;
 
-    if (isTimeChange || isDurationChange) {
+    // ✅ CRITICAL FIX: If duration changes, move EVERYONE.
+    if (isDurationChange) {
+      if (slot.times) {
+        slot.times.forEach((t) => {
+          affected.push(...t.appointments);
+          (t as any)._toBeDeleted = true;
+        });
+      } else {
+        const allBookings = await this.appointmentRepository.find({
+          where: { time: { slot: { id: slot.id } } },
+          relations: ['time', 'time.slot'],
+        });
+        affected.push(...allBookings);
+      }
+      return [...new Set(affected)];
+    }
+
+    // ✅ Surgical Logic ONLY for boundary changes
+    if (isTimeChange) {
       const H = '1970-01-01T';
       const newStart = new Date(H + newStartTimeStr);
       const newEnd = new Date(H + newEndTimeStr);
@@ -349,7 +383,10 @@ export class SlotsService {
       if (slot.scheduleType === ScheduleType.WAVE && slot.times) {
         for (const time of slot.times) {
           const timeStart = new Date(H + time.startTime);
-          const timeEnd = new Date(timeStart.getTime() + newDuration * 60000);
+          // Use CURRENT duration for boundary checks
+          const timeEnd = new Date(
+            timeStart.getTime() + slot.slotDuration * 60000,
+          );
 
           if (timeStart < newStart || timeEnd > newEnd) {
             affected.push(...time.appointments);
@@ -369,8 +406,9 @@ export class SlotsService {
 
         for (const booking of streamBookings) {
           const bookingStart = new Date(H + booking.time.startTime);
+          // Use CURRENT duration
           const bookingEnd = new Date(
-            bookingStart.getTime() + newDuration * 60000,
+            bookingStart.getTime() + slot.slotDuration * 60000,
           );
 
           if (bookingStart < newStart || bookingEnd > newEnd) {
@@ -473,7 +511,9 @@ export class SlotsService {
         }
       }
 
-      if (!isResolved) unresolved.push(appointment);
+      if (!isResolved) {
+        unresolved.push(appointment);
+      }
     }
 
     return unresolved;
@@ -512,7 +552,9 @@ export class SlotsService {
         }
       }
 
-      if (!isResolved) unresolved.push(appointment);
+      if (!isResolved) {
+        unresolved.push(appointment);
+      }
     }
 
     return unresolved;
@@ -524,7 +566,9 @@ export class SlotsService {
       relations: ['times', 'times.appointments', 'doctor'],
     });
 
-    if (!slot) throw new NotFoundException('Slot not found');
+    if (!slot) {
+      throw new NotFoundException('Slot not found');
+    }
 
     const appointmentsToMove = await this.appointmentRepository.find({
       where: { time: { slot: { id: slot.id } } },
