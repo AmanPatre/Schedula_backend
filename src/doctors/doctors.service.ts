@@ -8,7 +8,6 @@ import { UpdateDoctorDto } from './dto/update-doctor.dto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Doctor } from './entities/doctor.entity';
 import { Repository } from 'typeorm';
-import { UserRole } from 'src/users/entities/user.entity';
 import { Slot } from 'src/slots/entities/slot.entity';
 import { Time } from 'src/times/entities/time.entity';
 
@@ -36,7 +35,7 @@ export class DoctorsService {
 
     const newDoctorProfile = this.doctorRepository.create({
       ...createDoctorDto,
-      userId: userId,
+      userId,
     });
 
     return this.doctorRepository.save(newDoctorProfile);
@@ -59,7 +58,7 @@ export class DoctorsService {
     const slots = await this.slotRepository.find({
       where: {
         doctor: { id: doctorId },
-        date: new Date(date), 
+        date: new Date(date),
       },
     });
 
@@ -70,12 +69,14 @@ export class DoctorsService {
     }
 
     const response: any[] = [];
+
     for (const slot of slots) {
       if (slot.scheduleType === 'stream') {
         if (slot.currentBookings < slot.totalCapacity) {
           response.push({
             scheduleType: 'stream',
-            slot: slot,
+            slotId: slot.id,
+            slot,
           });
         }
       }
@@ -86,15 +87,16 @@ export class DoctorsService {
             slot: { id: slot.id },
             isAvailable: true,
           },
-          order: {
-            startTime: 'ASC',
-          },
+          order: { startTime: 'ASC' },
         });
 
         if (availableTimes.length > 0) {
           response.push({
             scheduleType: 'wave',
-            availableTimes: availableTimes,
+            slotId: slot.id,
+            date: slot.date,
+            session: slot.session,
+            availableTimes,
           });
         }
       }
