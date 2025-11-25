@@ -56,7 +56,6 @@ export class SlotsService {
       );
     }
 
-    // Keep existing check for startTimes presence
     if (
       createSlotDto.scheduleType === ScheduleType.WAVE &&
       (!createSlotDto.startTimes || createSlotDto.startTimes.length === 0)
@@ -66,8 +65,6 @@ export class SlotsService {
       );
     }
 
-    // vvv NEW VALIDATION BLOCK vvv
-    // Ensure startTimes fall within the new consultingStartTime/EndTime boundaries
     if (createSlotDto.scheduleType === ScheduleType.WAVE) {
       const { consultingStartTime, consultingEndTime, startTimes } =
         createSlotDto;
@@ -84,7 +81,6 @@ export class SlotsService {
       }
 
       for (const specificTime of startTimes) {
-        // String comparison works correctly for HH:MM:SS format
         if (
           specificTime < consultingStartTime ||
           specificTime >= consultingEndTime
@@ -95,7 +91,6 @@ export class SlotsService {
         }
       }
     }
-    // ^^^ END NEW VALIDATION BLOCK ^^^
 
     const loopDate = new Date(start);
     const createdSlots: Slot[] = [];
@@ -124,17 +119,14 @@ export class SlotsService {
           session: createSlotDto.session,
           scheduleType: createSlotDto.scheduleType,
           dayOfWeek: currentDayOfWeek,
-          // vvv Save new boundary fields vvv
           consultingStartTime: createSlotDto.consultingStartTime,
           consultingEndTime: createSlotDto.consultingEndTime,
-          // ^^^
           slotDuration: createSlotDto.slotDuration,
           totalCapacity: createSlotDto.totalCapacity,
         });
         await this.slotRepository.save(newSlot);
         createdSlots.push(newSlot);
 
-        // vvv EXISTING LOGIC REMAINS UNTOUCHED vvv
         if (
           createSlotDto.scheduleType === ScheduleType.WAVE &&
           createSlotDto.startTimes
@@ -150,7 +142,6 @@ export class SlotsService {
           });
           await Promise.all(timePromises);
         }
-        // ^^^
       }
       loopDate.setDate(loopDate.getDate() + 1);
     }
@@ -177,6 +168,7 @@ export class SlotsService {
     const response: any[] = [];
     for (const slot of slots) {
       if (slot.scheduleType === 'stream') {
+        // Stream already returns the whole slot object, which includes the ID.
         if (slot.currentBookings < slot.totalCapacity) {
           response.push({
             scheduleType: 'stream',
@@ -199,7 +191,9 @@ export class SlotsService {
         if (availableTimes.length > 0) {
           response.push({
             scheduleType: 'wave',
-            slotId: slot.id,
+
+            slotId: slot.id, // Include the Parent Slot ID
+
             availableTimes: availableTimes,
           });
         }
@@ -215,9 +209,12 @@ export class SlotsService {
     return response;
   }
 
+  // 👇👇👇 UPDATED UPDATE METHOD (The Coordinator) 👇👇👇
   async update(id: string, updateSlotDto: UpdateSlotDto) {
+    // 1. Find slot with DEEPER relations needed for surgical checking
     const slot = await this.slotRepository.findOne({
       where: { id },
+      // We need appointments inside times to avoid extra queries later
       relations: ['times', 'times.appointments', 'doctor'],
     });
 
@@ -225,11 +222,13 @@ export class SlotsService {
       throw new NotFoundException('Slot not found');
     }
 
+    // 2. Get specifically affected appointments (Surgical Strike Logic)
     const affectedAppointments = await this.getAffectedAppointments(
       slot,
       updateSlotDto,
     );
 
+    // 3. Resolve Conflicts (Move the affected patients)
     if (affectedAppointments.length > 0) {
       const unresolvedAppointments = await this.resolveConflicts(
         affectedAppointments,
@@ -238,28 +237,55 @@ export class SlotsService {
 
       if (unresolvedAppointments.length > 0) {
         throw new ConflictException(
-          `Update failed. ${unresolvedAppointments.length} patients could not be automatically moved. Please manually reschedule them.`,
+          `Update failed. ${unresolvedAppointments.length} patients falling outside the new boundaries could not be automatically moved.`,
         );
       }
     }
 
+    // 4. Clean up: Delete Wave Time entities that are now invalid and empty
+    if (slot.scheduleType === ScheduleType.WAVE && slot.times) {
+      // Find times marked for deletion in getAffectedAppointments
+      const timesToDelete = slot.times.filter(
+        (t) => (t as any)._toBeDeleted === true,
+      );
+
+      if (timesToDelete.length > 0) {
+        // Double check they are empty before deleting (safety first)
+        const emptyTimesToDelete = timesToDelete.filter(
+          (t) => t.appointments.length === 0,
+        );
+        if (emptyTimesToDelete.length > 0) {
+          await this.timeRepository.remove(emptyTimesToDelete);
+          // Remove them from the local slot object so they don't reappear on save
+          slot.times = slot.times.filter(
+            (t) => !emptyTimesToDelete.includes(t),
+          );
+        }
+      }
+    }
+
+    // 5. Apply updates to parent slot properties
     Object.assign(slot, updateSlotDto);
 
+    // Handle capacityPerSlot update for remaining valid Wave times
     if (
       slot.scheduleType === 'wave' &&
-      updateSlotDto.capacityPerSlot !== undefined
+      updateSlotDto.capacityPerSlot !== undefined &&
+      slot.times
     ) {
-      if (slot.times) {
-        for (const time of slot.times) {
-          time.capacityPerSlot = updateSlotDto.capacityPerSlot;
-          await this.timeRepository.save(time);
-        }
+      for (const time of slot.times) {
+        time.capacityPerSlot = updateSlotDto.capacityPerSlot;
+        // Recalculate availability based on new capacity
+        time.isAvailable = time.currentBookings < time.capacityPerSlot;
+        await this.timeRepository.save(time);
       }
     }
 
     return this.slotRepository.save(slot);
   }
+  // 👆👆👆 END UPDATED UPDATE METHOD 👆👆👆
 
+  // ... [updateTimeSlot remains the same] ...
   async updateTimeSlot(timeId: string, newCapacity: number) {
     const timeSlot = await this.timeRepository.findOne({
       where: { id: timeId },
@@ -313,6 +339,7 @@ export class SlotsService {
   ): Promise<Appointment[]> {
     let affected: Appointment[] = [];
 
+    // --- Scenario A: Capacity Shrinks (Existing Logic) ---
     if (
       slot.scheduleType === 'stream' &&
       dto.totalCapacity !== undefined &&
@@ -323,38 +350,79 @@ export class SlotsService {
         order: { createdAt: 'ASC' },
         relations: ['time', 'time.slot'],
       });
-
       const excessCount = slot.currentBookings - dto.totalCapacity;
       affected = bookings.slice(-excessCount);
     }
 
     if (slot.scheduleType === 'wave' && dto.capacityPerSlot !== undefined) {
-      for (const time of slot.times) {
-        if (time.currentBookings > dto.capacityPerSlot) {
-          const timeBookings = await this.appointmentRepository.find({
-            where: { time: { id: time.id } },
-            order: { createdAt: 'ASC' },
-            relations: ['time'],
-          });
-          const excess = time.currentBookings - dto.capacityPerSlot;
-          affected.push(...timeBookings.slice(-excess));
+      // NOTE: slot.times is already loaded with appointments from update()
+      if (slot.times) {
+        for (const time of slot.times) {
+          if (time.currentBookings > dto.capacityPerSlot) {
+            // Appointments are already loaded in time.appointments
+            const excess = time.currentBookings - dto.capacityPerSlot;
+            // Get last 'excess' appointments (assuming they are sorted by time in DB)
+            affected.push(...time.appointments.slice(-excess));
+          }
         }
       }
     }
 
-    if (
-      (dto.consultingStartTime &&
-        dto.consultingStartTime !== slot.consultingStartTime) ||
-      (dto.slotDuration && dto.slotDuration !== slot.slotDuration)
-    ) {
-      const allBookings = await this.appointmentRepository.find({
-        where: { time: { slot: { id: slot.id } } },
-        relations: ['time', 'time.slot'],
-      });
-      affected = allBookings;
+    // --- Scenario B: Boundary/Duration Changes (Surgical Strike) ---
+    const newStartTimeStr = dto.consultingStartTime ?? slot.consultingStartTime;
+    const newEndTimeStr = dto.consultingEndTime ?? slot.consultingEndTime;
+    const newDuration = dto.slotDuration ?? slot.slotDuration;
+
+    const isTimeChange =
+      newStartTimeStr !== slot.consultingStartTime ||
+      newEndTimeStr !== slot.consultingEndTime;
+    const isDurationChange = newDuration !== slot.slotDuration;
+
+    if (isTimeChange || isDurationChange) {
+      const H = '1970-01-01T';
+      const newStart = new Date(H + newStartTimeStr);
+      const newEnd = new Date(H + newEndTimeStr);
+
+      if (slot.scheduleType === ScheduleType.WAVE && slot.times) {
+        for (const time of slot.times) {
+          const timeStart = new Date(H + time.startTime);
+
+          const timeEnd = new Date(timeStart.getTime() + newDuration * 60000);
+
+          if (timeStart < newStart || timeEnd > newEnd) {
+            affected.push(...time.appointments);
+
+            (time as any)._toBeDeleted = true;
+          }
+        }
+      }
+
+      if (slot.scheduleType === ScheduleType.STREAM) {
+        let streamBookings = affected;
+        if (streamBookings.length === 0 && slot.currentBookings > 0) {
+          streamBookings = await this.appointmentRepository.find({
+            where: { time: { slot: { id: slot.id } } },
+            relations: ['time'],
+          });
+        }
+
+        for (const booking of streamBookings) {
+          const bookingStart = new Date(H + booking.time.startTime);
+
+          const bookingEnd = new Date(
+            bookingStart.getTime() + newDuration * 60000,
+          );
+
+          if (bookingStart < newStart || bookingEnd > newEnd) {
+            if (!affected.find((a) => a.id === booking.id)) {
+              affected.push(booking);
+            }
+          }
+        }
+      }
     }
 
-    return affected;
+    return [...new Set(affected)];
   }
 
   private async resolveConflicts(
