@@ -18,7 +18,7 @@ import { UpdateAppointmentDto } from './dto/update-appointment.dto';
 import { AuthGuard } from '@nestjs/passport';
 import { RescheduleAllDto, RescheduleSelectedDto } from './dto/reschedule.dto';
 
-@Controller('api/v1/appointments')
+@Controller('appointments')
 @UseGuards(AuthGuard('jwt'))
 export class AppointmentsController {
   constructor(private readonly appointmentsService: AppointmentsService) {}
