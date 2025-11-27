@@ -9,7 +9,7 @@ import { CreateAppointmentDto } from './dto/create-appointment.dto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { UpdateAppointmentDto } from './dto/update-appointment.dto';
 import { Appointment } from './entities/appointment.entity';
-import { Repository, In } from 'typeorm';
+import { Repository, In, MoreThan } from 'typeorm';
 import { Time } from 'src/times/entities/time.entity';
 import { Slot, ScheduleType } from 'src/slots/entities/slot.entity';
 import { RescheduleAppointmentDto } from './dto/reschedule-appointment.dto';
@@ -38,7 +38,6 @@ export class AppointmentsService {
   async create(createAppointmentDto: CreateAppointmentDto, userId: string) {
     const { patientId, slotId, timeId, scheduleType } = createAppointmentDto;
 
-    // Verify patient exists
     const patient = await this.patientRepository.findOne({
       where: { id: patientId },
     });
@@ -46,31 +45,50 @@ export class AppointmentsService {
       throw new NotFoundException('Patient not found');
     }
 
-    // Verify patient belongs to the authenticated user
     if (patient.userId !== userId) {
       throw new UnauthorizedException(
         'You can only book appointments for yourself.',
       );
     }
 
-    let appointment = this.appointmentRepository.create({
-      patient,
-      scheduleType,
-      status: AppointmentStatus.BOOKED, // Default status
-    });
+    let finalSlotId = slotId;
+    let finalTimeId = timeId;
 
     if (scheduleType === ScheduleType.STREAM) {
-      const slot = await this.slotRepository.findOne({
-        where: { id: slotId },
+      let slot = await this.slotRepository.findOne({
+        where: { id: finalSlotId },
         relations: ['doctor'],
       });
       if (!slot) throw new NotFoundException('Slot not found');
 
       if (slot.currentBookings >= slot.totalCapacity) {
-        throw new BadRequestException('Slot is fully booked');
+        const nextSlot = await this.slotRepository.findOne({
+          where: {
+            doctor: { id: slot.doctor.id },
+            date: MoreThan(slot.date),
+            scheduleType: ScheduleType.STREAM,
+          },
+          order: { date: 'ASC' },
+        });
+
+        if (!nextSlot || nextSlot.currentBookings >= nextSlot.totalCapacity) {
+          throw new BadRequestException(
+            'Selected slot is full and no future availability found.',
+          );
+        }
+
+        slot = nextSlot;
+        finalSlotId = nextSlot.id;
       }
 
-      // Create a specific time entry for this stream appointment
+      const appointment = this.appointmentRepository.create({
+        patient,
+        scheduleType,
+        status: AppointmentStatus.BOOKED,
+        slot: slot,
+        doctor: slot.doctor,
+      });
+
       const minutesToAdd = slot.slotDuration * slot.currentBookings;
       const [h, m] = slot.consultingStartTime.split(':').map(Number);
       const startTimeDate = new Date(slot.date);
@@ -87,33 +105,78 @@ export class AppointmentsService {
       await this.timeRepository.save(newTime);
 
       appointment.time = newTime;
-      appointment.doctor = slot.doctor;
+
       slot.currentBookings++;
       await this.slotRepository.save(slot);
+
+      return this.appointmentRepository.save(appointment);
     } else if (scheduleType === ScheduleType.WAVE) {
-      const time = await this.timeRepository.findOne({
-        where: { id: timeId },
+      let time = await this.timeRepository.findOne({
+        where: { id: finalTimeId },
         relations: ['slot', 'slot.doctor'],
       });
       if (!time) throw new NotFoundException('Time slot not found');
 
       if (!time.isAvailable || time.currentBookings >= time.capacityPerSlot) {
-        throw new BadRequestException('Time slot is not available');
+        let nextTime = await this.timeRepository.findOne({
+          where: {
+            slot: { id: time.slot.id },
+            isAvailable: true,
+            startTime: MoreThan(time.startTime),
+          },
+          order: { startTime: 'ASC' },
+        });
+
+        if (!nextTime) {
+          const nextSlot = await this.slotRepository.findOne({
+            where: {
+              doctor: { id: time.slot.doctor.id },
+              date: MoreThan(time.slot.date),
+              scheduleType: ScheduleType.WAVE,
+            },
+            order: { date: 'ASC' },
+          });
+
+          if (nextSlot) {
+            nextTime = await this.timeRepository.findOne({
+              where: { slot: { id: nextSlot.id }, isAvailable: true },
+              order: { startTime: 'ASC' },
+            });
+          }
+        }
+
+        if (!nextTime) {
+          throw new BadRequestException(
+            'Selected time is full and no future availability found.',
+          );
+        }
+
+        time = await this.timeRepository.findOne({
+          where: { id: nextTime.id },
+          relations: ['slot', 'slot.doctor'],
+        });
       }
 
-      appointment.time = time;
-      appointment.doctor = time.slot.doctor;
+      const appointment = this.appointmentRepository.create({
+        patient,
+        scheduleType,
+        status: AppointmentStatus.BOOKED,
+        time: time,
+        slot: time.slot,
+        doctor: time.slot.doctor,
+      });
+
       time.currentBookings++;
       if (time.currentBookings >= time.capacityPerSlot) {
         time.isAvailable = false;
       }
       await this.timeRepository.save(time);
-      // Increment parent slot bookings as well
+
       time.slot.currentBookings++;
       await this.slotRepository.save(time.slot);
-    }
 
-    return this.appointmentRepository.save(appointment);
+      return this.appointmentRepository.save(appointment);
+    }
   }
 
   async findOne(id: string): Promise<Appointment> {
@@ -150,7 +213,6 @@ export class AppointmentsService {
     });
   }
 
-  // Task 2: Cancel Appointment (Doctor or Patient)
   async cancel(id: string, user: any) {
     const appointment = await this.appointmentRepository.findOne({
       where: { id },
@@ -161,7 +223,6 @@ export class AppointmentsService {
       throw new NotFoundException('Appointment not found');
     }
 
-    // Authorization check: User must be the patient or the doctor
     if (
       appointment.patient.userId !== user.userId &&
       appointment.doctor.userId !== user.userId
@@ -177,13 +238,11 @@ export class AppointmentsService {
 
     appointment.status = AppointmentStatus.CANCELLED;
 
-    // Re-open availability
     if (appointment.time) {
       appointment.time.currentBookings--;
       if (appointment.time.currentBookings < 0)
         appointment.time.currentBookings = 0;
 
-      // Mark available if it was full
       if (appointment.time.currentBookings < appointment.time.capacityPerSlot) {
         appointment.time.isAvailable = true;
       }
@@ -200,7 +259,6 @@ export class AppointmentsService {
     return this.appointmentRepository.save(appointment);
   }
 
-  // Task 1: Reschedule Selected (Doctor Only)
   async rescheduleSelected(
     appointmentIds: string[],
     shiftMinutes: number,
@@ -223,12 +281,10 @@ export class AppointmentsService {
     let rescheduledCount = 0;
 
     for (const appt of appointments) {
-      // Verify doctor owns this appointment
       if (appt.doctor.id !== doctor.id) {
         continue;
       }
 
-      // Skip cancelled or past appointments
       if (
         appt.status === AppointmentStatus.CANCELLED ||
         !this.isFuture(appt.time)
@@ -245,25 +301,35 @@ export class AppointmentsService {
     };
   }
 
-  // Task 1: Reschedule All Future (Doctor Only)
-  async rescheduleAll(shiftMinutes: number, doctorUserId: string) {
+  async rescheduleAll(
+    shiftMinutes: number,
+    doctorUserId: string,
+    slotId?: string,
+  ) {
     const doctor = await this.doctorRepository.findOne({
       where: { userId: doctorUserId },
     });
     if (!doctor) throw new NotFoundException('Doctor not found');
 
+    // Build the query dynamically
+    const where: any = {
+      doctor: { id: doctor.id },
+      status: AppointmentStatus.BOOKED,
+    };
+
+    // If slotId is provided, only fetch appointments linked to that slot
+    if (slotId) {
+      where.slot = { id: slotId };
+    }
+
     const allAppointments = await this.appointmentRepository.find({
-      where: {
-        doctor: { id: doctor.id },
-        status: AppointmentStatus.BOOKED,
-      },
+      where: where,
       relations: ['time', 'time.slot'],
     });
 
     let rescheduledCount = 0;
 
     for (const appt of allAppointments) {
-      // Filter for future appointments only
       if (this.isFuture(appt.time)) {
         await this.applyShiftToAppointment(appt, shiftMinutes);
         rescheduledCount++;
@@ -275,7 +341,6 @@ export class AppointmentsService {
     };
   }
 
-  // Keep existing reschedule for patient (with history)
   async reschedule(
     appointmentId: string,
     rescheduleDto: RescheduleAppointmentDto,
@@ -305,14 +370,12 @@ export class AppointmentsService {
     const previousTime = appointment.time;
     const previousScheduleType = appointment.scheduleType;
 
-    // 1. Release old slot
     if (previousTime) {
       if (previousScheduleType === 'wave') {
         previousTime.currentBookings -= 1;
         if (previousTime.currentBookings < 0) previousTime.currentBookings = 0;
         previousTime.isAvailable = true;
         await this.timeRepository.save(previousTime);
-        // Also decrement parent slot for Wave
         if (previousTime.slot) {
           previousTime.slot.currentBookings -= 1;
           if (previousTime.slot.currentBookings < 0)
@@ -329,14 +392,12 @@ export class AppointmentsService {
       }
     }
 
-    // 2. Book new slot
     const { timeId, slotId } = rescheduleDto;
     let newAppointmentTime: Time;
     let newScheduleType: ScheduleType;
     let newDoctor: Doctor;
 
     if (timeId) {
-      // ... (Wave booking logic similar to create) ...
       const timeSlot = await this.timeRepository.findOne({
         where: { id: timeId },
         relations: ['slot', 'slot.doctor'],
@@ -357,7 +418,6 @@ export class AppointmentsService {
       newScheduleType = ScheduleType.WAVE;
       newDoctor = timeSlot.slot.doctor;
     } else if (slotId) {
-      // ... (Stream booking logic similar to create) ...
       const streamSlot = await this.slotRepository.findOne({
         where: { id: slotId },
         relations: ['doctor'],
@@ -366,7 +426,6 @@ export class AppointmentsService {
       if (streamSlot.currentBookings >= streamSlot.totalCapacity) {
         throw new ConflictException('This stream slot is fully booked.');
       }
-      // Calculate start time
       const minutesToAdd = streamSlot.slotDuration * streamSlot.currentBookings;
       const [h, m] = streamSlot.consultingStartTime.split(':').map(Number);
       const startTimeDate = new Date(streamSlot.date);
@@ -389,7 +448,6 @@ export class AppointmentsService {
       throw new ConflictException('Either timeId or slotId must be provided.');
     }
 
-    // 3. Record history and update appointment
     const historyEntry = this.rescheduleHistoryRepository.create({
       appointment: appointment,
       previousTime: previousTime,
@@ -400,11 +458,10 @@ export class AppointmentsService {
 
     appointment.time = newAppointmentTime;
     appointment.scheduleType = newScheduleType;
-    appointment.doctor = newDoctor; // Update doctor in case it changed
+    appointment.doctor = newDoctor;
     const updatedAppointment =
       await this.appointmentRepository.save(appointment);
 
-    // Clean up old stream time entity
     if (previousScheduleType === 'stream' && previousTime) {
       await this.timeRepository.remove(previousTime);
     }
@@ -412,13 +469,12 @@ export class AppointmentsService {
     return updatedAppointment;
   }
 
-  // --- Helpers ---
-
   private async applyShiftToAppointment(
     appt: Appointment,
     shiftMinutes: number,
   ) {
     const oldTimeEntity = appt.time;
+
     const newStartTime = this.addMinutesToTime(
       oldTimeEntity.startTime,
       shiftMinutes,
@@ -426,15 +482,21 @@ export class AppointmentsService {
 
     if (appt.scheduleType === ScheduleType.STREAM) {
       oldTimeEntity.startTime = newStartTime;
-      await this.timeRepository.save(oldTimeEntity);
+      const savedNewTime = await this.timeRepository.save(oldTimeEntity);
+
+      const history = this.rescheduleHistoryRepository.create({
+        appointment: appt,
+        previousTime: undefined,
+        newTime: savedNewTime,
+        reason: `Doctor rescheduled by ${shiftMinutes} minutes`,
+      });
+      await this.rescheduleHistoryRepository.save(history);
     } else if (appt.scheduleType === ScheduleType.WAVE) {
-      // Detach from shared Wave slot
       oldTimeEntity.currentBookings--;
       if (oldTimeEntity.currentBookings < 0) oldTimeEntity.currentBookings = 0;
       oldTimeEntity.isAvailable = true;
       await this.timeRepository.save(oldTimeEntity);
 
-      // Create new dedicated slot
       const newTimeEntity = this.timeRepository.create({
         startTime: newStartTime,
         isAvailable: false,
@@ -442,10 +504,18 @@ export class AppointmentsService {
         currentBookings: 1,
         slot: oldTimeEntity.slot,
       });
-      await this.timeRepository.save(newTimeEntity);
+      const savedNewTime = await this.timeRepository.save(newTimeEntity);
 
-      appt.time = newTimeEntity;
+      appt.time = savedNewTime;
       await this.appointmentRepository.save(appt);
+
+      const history = this.rescheduleHistoryRepository.create({
+        appointment: appt,
+        previousTime: undefined,
+        newTime: savedNewTime,
+        reason: `Doctor rescheduled by ${shiftMinutes} minutes`,
+      });
+      await this.rescheduleHistoryRepository.save(history);
     }
   }
 

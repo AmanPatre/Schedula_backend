@@ -10,7 +10,6 @@ import {
   Req,
   ForbiddenException,
   BadRequestException,
-  ConflictException,
 } from '@nestjs/common';
 import { AppointmentsService } from './appointments.service';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
@@ -63,6 +62,7 @@ export class AppointmentsController {
     return this.appointmentsService.rescheduleAll(
       dto.shift_minutes,
       req.user.userId,
+      dto.slotId, // Pass the slotId to the service
     );
   }
 

@@ -6,6 +6,7 @@ import {
   Max,
   Min,
   ValidateIf,
+  IsOptional, // Added
 } from 'class-validator';
 
 export class RescheduleBaseDto {
@@ -26,4 +27,8 @@ export class RescheduleSelectedDto extends RescheduleBaseDto {
   appointment_ids: string[];
 }
 
-export class RescheduleAllDto extends RescheduleBaseDto {}
+export class RescheduleAllDto extends RescheduleBaseDto {
+  @IsOptional()
+  @IsUUID()
+  slotId?: string;
+}
