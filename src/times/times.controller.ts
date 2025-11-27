@@ -9,17 +9,24 @@ import {
 import { TimesService } from './times.service';
 import { AuthGuard } from '@nestjs/passport';
 
+import { SlotsService } from 'src/slots/slots.service';
+
 @Controller('times')
 export class TimesController {
-  constructor(private readonly timesService: TimesService) {}
+  constructor(
+    private readonly timesService: TimesService,
+
+    private readonly slotsService: SlotsService,
+  ) {}
 
   @Delete(':id')
   @UseGuards(AuthGuard('jwt'))
-  remove(@Param('id') id: string, @Req() req: any) {
+  async remove(@Param('id') id: string, @Req() req: any) {
     const user = req.user;
     if (user.role !== 'doctor') {
       throw new ConflictException('Only doctors can delete availability.');
     }
-    return this.timesService.remove(id);
+
+    return this.slotsService.deleteTimeSlot(id);
   }
 }

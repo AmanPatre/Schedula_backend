@@ -1,3 +1,5 @@
+// src/slots/slots.module.ts
+
 import { Module } from '@nestjs/common';
 import { SlotsService } from './slots.service';
 import { SlotsController } from './slots.controller';
@@ -11,5 +13,7 @@ import { Appointment } from 'src/appointments/entities/appointment.entity';
   imports: [TypeOrmModule.forFeature([Slot, Doctor, Time, Appointment])],
   controllers: [SlotsController],
   providers: [SlotsService],
+
+  exports: [SlotsService],
 })
 export class SlotsModule {}
