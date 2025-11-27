@@ -8,6 +8,8 @@ import {
 } from 'typeorm';
 import { Doctor } from 'src/doctors/entities/doctor.entity';
 import { Time } from 'src/times/entities/time.entity';
+// 👇 Import Appointment
+import { Appointment } from 'src/appointments/entities/appointment.entity';
 
 export enum SessionType {
   MORNING = 'morning',
@@ -77,4 +79,7 @@ export class Slot {
 
   @OneToMany(() => Time, (time) => time.slot, { cascade: true })
   times: Time[];
+
+  @OneToMany(() => Appointment, (appointment) => appointment.slot)
+  appointments: Appointment[];
 }
