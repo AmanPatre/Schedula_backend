@@ -210,6 +210,7 @@ export class SlotsService {
   async update(id: string, updateSlotDto: UpdateSlotDto) {
     const slot = await this.slotRepository.findOne({
       where: { id },
+      // IMPORTANT: We need appointments here to move them, but it causes stale data issues later.
       relations: ['times', 'times.appointments', 'doctor'],
     });
 
@@ -217,11 +218,13 @@ export class SlotsService {
       throw new NotFoundException('Slot not found');
     }
 
+    // 1. Identify affected patients and mark invalid times for _toBeDeleted
     const affectedAppointments = await this.getAffectedAppointments(
       slot,
       updateSlotDto,
     );
 
+    // 2. Move the patients in the DB
     if (affectedAppointments.length > 0) {
       const unresolvedAppointments = await this.resolveConflicts(
         affectedAppointments,
@@ -235,26 +238,28 @@ export class SlotsService {
       }
     }
 
+    // 3. Cleanup: Delete Wave Time entities that are now invalid
     if (slot.scheduleType === ScheduleType.WAVE && slot.times) {
       const timesToDelete = slot.times.filter(
         (t) => (t as any)._toBeDeleted === true,
       );
 
       if (timesToDelete.length > 0) {
-        const emptyTimesToDelete = timesToDelete.filter(
-          (t) => t.appointments.length === 0,
-        );
-        if (emptyTimesToDelete.length > 0) {
-          await this.timeRepository.remove(emptyTimesToDelete);
-          slot.times = slot.times.filter(
-            (t) => !emptyTimesToDelete.includes(t),
-          );
-        }
+        // ▼▼▼▼▼▼ FIX: Use .delete() with IDs instead of .remove() ▼▼▼▼▼▼
+        // This forces a raw delete in the DB and avoids TypeORM relation confusion.
+        const idsToDelete = timesToDelete.map((t) => t.id);
+        await this.timeRepository.delete(idsToDelete);
+
+        // CRITICAL: Remove them from the in-memory slot object so the final save doesn't try to resurrect them.
+        slot.times = slot.times.filter((t) => !(t as any)._toBeDeleted);
+        // ▲▲▲▲▲▲ FIX ENDS HERE ▲▲▲▲▲▲
       }
     }
 
+    // 4. Apply updates to parent slot properties
     Object.assign(slot, updateSlotDto);
 
+    // 5. Handle capacityPerSlot update for remaining valid Wave times
     if (
       slot.scheduleType === 'wave' &&
       updateSlotDto.capacityPerSlot !== undefined &&
@@ -262,12 +267,28 @@ export class SlotsService {
     ) {
       for (const time of slot.times) {
         time.capacityPerSlot = updateSlotDto.capacityPerSlot;
+        // Recalculate availability based on bookings (Note: these are stale in-memory bookings, but safe for capacity checks)
         time.isAvailable = time.currentBookings < time.capacityPerSlot;
         await this.timeRepository.save(time);
       }
     }
 
-    return this.slotRepository.save(slot);
+    // Final save of the parent slot
+    await this.slotRepository.save(slot);
+
+    // ▼▼▼▼▼▼ FIX: RELOAD FROM DB BEFORE RETURNING ▼▼▼▼▼▼
+    // DO NOT return the result of save() directly. It can contain stale relationship data.
+    // Instead, fetch the "source of truth" fresh from the database.
+    const updatedSlot = await this.slotRepository.findOne({
+      where: { id: slot.id },
+      relations: ['times'], // Reload times to confirm deletions happened
+      order: {
+        times: { startTime: 'ASC' }, // Keep nicely ordered
+      },
+    });
+
+    return updatedSlot;
+    // ▲▲▲▲▲▲ FIX ENDS HERE ▲▲▲▲▲▲
   }
 
   async updateTimeSlot(timeId: string, newCapacity: number) {
@@ -317,6 +338,57 @@ export class SlotsService {
     return this.timeRepository.save(timeSlot);
   }
 
+  // New method to handle deleting a specific Wave time slot with escalation
+  async deleteTimeSlot(timeId: string) {
+    // 1. Find the time slot with all needed relations
+    const timeSlot = await this.timeRepository.findOne({
+      where: { id: timeId },
+      relations: ['slot', 'slot.times', 'slot.doctor', 'appointments'],
+    });
+
+    if (!timeSlot) {
+      throw new NotFoundException('Time slot not found');
+    }
+
+    if (timeSlot.slot.scheduleType !== ScheduleType.WAVE) {
+      throw new BadRequestException(
+        'Only Wave time slots can be deleted individually.',
+      );
+    }
+
+    // Ensure times are sorted so cascading works correctly
+    timeSlot.slot.times.sort((a, b) => a.startTime.localeCompare(b.startTime));
+
+    const appointmentsToMove = timeSlot.appointments;
+
+    if (appointmentsToMove.length > 0) {
+      // Strategy 1: Try a small Cascading Move (same session)
+      let unresolved = await this.cascadingWaveMove(
+        appointmentsToMove,
+        timeSlot,
+      );
+
+      // Strategy 2: If Cascade failed, escalate to Waterfall Move (diff session/day)
+      if (unresolved.length > 0) {
+        // We pass the parent slot so it knows the doctor and date context
+        unresolved = await this.resolveConflicts(unresolved, timeSlot.slot);
+      }
+
+      // If Waterfall also failed, we cannot delete
+      if (unresolved.length > 0) {
+        throw new ConflictException(
+          `Cannot delete this time slot. ${unresolved.length} patients could not be moved to any available time (in this session or future sessions).`,
+        );
+      }
+    }
+
+    // If we got here, all patients are moved. Delete the time slot.
+    await this.timeRepository.remove(timeSlot);
+    return {
+      message: 'Time slot deleted and patients successfully rescheduled.',
+    };
+  }
+
   private async getAffectedAppointments(
     slot: Slot,
     dto: UpdateSlotDto,
@@ -357,7 +429,6 @@ export class SlotsService {
       newEndTimeStr !== slot.consultingEndTime;
     const isDurationChange = newDuration !== slot.slotDuration;
 
-    // ✅ CRITICAL FIX: If duration changes, move EVERYONE.
     if (isDurationChange) {
       if (slot.times) {
         slot.times.forEach((t) => {
@@ -374,7 +445,6 @@ export class SlotsService {
       return [...new Set(affected)];
     }
 
-    // ✅ Surgical Logic ONLY for boundary changes
     if (isTimeChange) {
       const H = '1970-01-01T';
       const newStart = new Date(H + newStartTimeStr);
@@ -383,7 +453,6 @@ export class SlotsService {
       if (slot.scheduleType === ScheduleType.WAVE && slot.times) {
         for (const time of slot.times) {
           const timeStart = new Date(H + time.startTime);
-          // Use CURRENT duration for boundary checks
           const timeEnd = new Date(
             timeStart.getTime() + slot.slotDuration * 60000,
           );
@@ -406,7 +475,6 @@ export class SlotsService {
 
         for (const booking of streamBookings) {
           const bookingStart = new Date(H + booking.time.startTime);
-          // Use CURRENT duration
           const bookingEnd = new Date(
             bookingStart.getTime() + slot.slotDuration * 60000,
           );
@@ -430,6 +498,11 @@ export class SlotsService {
     const unresolved: Appointment[] = [];
 
     const startDate = new Date(originalSlot.date);
+    startDate.setHours(
+      parseInt(originalSlot.consultingStartTime.split(':')[0]),
+      parseInt(originalSlot.consultingStartTime.split(':')[1]),
+    );
+
     const endDate = new Date(startDate);
     endDate.setDate(startDate.getDate() + 7);
 
@@ -450,58 +523,71 @@ export class SlotsService {
       let isResolved = false;
 
       for (const targetSlot of targetSlots) {
-        if (
-          targetSlot.scheduleType === 'stream' &&
-          targetSlot.currentBookings < targetSlot.totalCapacity
-        ) {
-          const minutesToAdd =
-            targetSlot.slotDuration * targetSlot.currentBookings;
-          if (!targetSlot.consultingStartTime) continue;
+        if (targetSlot.scheduleType === 'stream') {
+          // Priority Squeezing: <= instead of <
+          if (targetSlot.currentBookings <= targetSlot.totalCapacity) {
+            const minutesToAdd =
+              targetSlot.slotDuration * targetSlot.currentBookings;
+            if (!targetSlot.consultingStartTime) continue;
 
-          const [h, m] = targetSlot.consultingStartTime.split(':').map(Number);
-          const newStart = new Date(targetSlot.date);
-          newStart.setHours(h, m + minutesToAdd);
-          const timeString = newStart.toTimeString().split(' ')[0];
+            const [h, m] = targetSlot.consultingStartTime
+              .split(':')
+              .map(Number);
+            const newStart = new Date(targetSlot.date);
+            newStart.setHours(h, m + minutesToAdd);
+            const timeString = newStart.toTimeString().split(' ')[0];
 
-          const newTime = this.timeRepository.create({
-            startTime: timeString,
-            isAvailable: false,
-            capacityPerSlot: 1,
-            currentBookings: 1,
-            slot: targetSlot,
-          });
-          await this.timeRepository.save(newTime);
+            const newTime = this.timeRepository.create({
+              startTime: timeString,
+              isAvailable: false,
+              capacityPerSlot: 1,
+              currentBookings: 1,
+              slot: targetSlot,
+            });
+            await this.timeRepository.save(newTime);
 
-          appointment.time = newTime;
-          appointment.scheduleType = ScheduleType.STREAM;
-          await this.appointmentRepository.save(appointment);
+            appointment.time = newTime;
+            appointment.scheduleType = ScheduleType.STREAM;
+            await this.appointmentRepository.save(appointment);
 
-          targetSlot.currentBookings += 1;
-          await this.slotRepository.save(targetSlot);
+            targetSlot.currentBookings += 1;
+            await this.slotRepository.save(targetSlot);
 
-          originalSlot.currentBookings -= 1;
+            originalSlot.currentBookings -= 1;
 
-          isResolved = true;
-          break;
+            isResolved = true;
+            break;
+          }
         }
 
-        if (targetSlot.scheduleType === 'wave') {
-          const availableTime = targetSlot.times.find(
+        if (targetSlot.scheduleType === 'wave' && targetSlot.times) {
+          // Ensure times are sorted before searching
+          targetSlot.times.sort((a, b) =>
+            a.startTime.localeCompare(b.startTime),
+          );
+
+          // Priority Search Step 1: Find open slot
+          let targetTime = targetSlot.times.find(
             (t) => t.currentBookings < t.capacityPerSlot,
           );
 
-          if (availableTime) {
-            appointment.time = availableTime;
+          // Priority Search Step 2: Find exactly full slot to squeeze in
+          if (!targetTime) {
+            targetTime = targetSlot.times.find(
+              (t) => t.currentBookings === t.capacityPerSlot,
+            );
+          }
+
+          if (targetTime) {
+            appointment.time = targetTime;
             appointment.scheduleType = ScheduleType.WAVE;
             await this.appointmentRepository.save(appointment);
 
-            availableTime.currentBookings += 1;
-            if (
-              availableTime.currentBookings >= availableTime.capacityPerSlot
-            ) {
-              availableTime.isAvailable = false;
-            }
-            await this.timeRepository.save(availableTime);
+            targetTime.currentBookings += 1;
+            // FIXED: Only mark unavailable if it is actually full (or overfull)
+            targetTime.isAvailable =
+              targetTime.currentBookings < targetTime.capacityPerSlot;
+            await this.timeRepository.save(targetTime);
 
             originalSlot.currentBookings -= 1;
 
