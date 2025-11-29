@@ -167,6 +167,7 @@ export class SlotsService {
     }
 
     const response: any[] = [];
+
     for (const slot of slots) {
       if (slot.scheduleType === 'stream') {
         if (slot.currentBookings < slot.totalCapacity) {
@@ -210,7 +211,6 @@ export class SlotsService {
   async update(id: string, updateSlotDto: UpdateSlotDto) {
     const slot = await this.slotRepository.findOne({
       where: { id },
-      // IMPORTANT: We need appointments here to move them, but it causes stale data issues later.
       relations: ['times', 'times.appointments', 'doctor'],
     });
 
@@ -218,13 +218,11 @@ export class SlotsService {
       throw new NotFoundException('Slot not found');
     }
 
-    // 1. Identify affected patients and mark invalid times for _toBeDeleted
     const affectedAppointments = await this.getAffectedAppointments(
       slot,
       updateSlotDto,
     );
 
-    // 2. Move the patients in the DB
     if (affectedAppointments.length > 0) {
       const unresolvedAppointments = await this.resolveConflicts(
         affectedAppointments,
@@ -238,28 +236,21 @@ export class SlotsService {
       }
     }
 
-    // 3. Cleanup: Delete Wave Time entities that are now invalid
     if (slot.scheduleType === ScheduleType.WAVE && slot.times) {
       const timesToDelete = slot.times.filter(
         (t) => (t as any)._toBeDeleted === true,
       );
 
       if (timesToDelete.length > 0) {
-        // ▼▼▼▼▼▼ FIX: Use .delete() with IDs instead of .remove() ▼▼▼▼▼▼
-        // This forces a raw delete in the DB and avoids TypeORM relation confusion.
         const idsToDelete = timesToDelete.map((t) => t.id);
         await this.timeRepository.delete(idsToDelete);
 
-        // CRITICAL: Remove them from the in-memory slot object so the final save doesn't try to resurrect them.
         slot.times = slot.times.filter((t) => !(t as any)._toBeDeleted);
-        // ▲▲▲▲▲▲ FIX ENDS HERE ▲▲▲▲▲▲
       }
     }
 
-    // 4. Apply updates to parent slot properties
     Object.assign(slot, updateSlotDto);
 
-    // 5. Handle capacityPerSlot update for remaining valid Wave times
     if (
       slot.scheduleType === 'wave' &&
       updateSlotDto.capacityPerSlot !== undefined &&
@@ -267,28 +258,22 @@ export class SlotsService {
     ) {
       for (const time of slot.times) {
         time.capacityPerSlot = updateSlotDto.capacityPerSlot;
-        // Recalculate availability based on bookings (Note: these are stale in-memory bookings, but safe for capacity checks)
         time.isAvailable = time.currentBookings < time.capacityPerSlot;
         await this.timeRepository.save(time);
       }
     }
 
-    // Final save of the parent slot
     await this.slotRepository.save(slot);
 
-    // ▼▼▼▼▼▼ FIX: RELOAD FROM DB BEFORE RETURNING ▼▼▼▼▼▼
-    // DO NOT return the result of save() directly. It can contain stale relationship data.
-    // Instead, fetch the "source of truth" fresh from the database.
     const updatedSlot = await this.slotRepository.findOne({
       where: { id: slot.id },
-      relations: ['times'], // Reload times to confirm deletions happened
+      relations: ['times'],
       order: {
-        times: { startTime: 'ASC' }, // Keep nicely ordered
+        times: { startTime: 'ASC' },
       },
     });
 
     return updatedSlot;
-    // ▲▲▲▲▲▲ FIX ENDS HERE ▲▲▲▲▲▲
   }
 
   async updateTimeSlot(timeId: string, newCapacity: number) {
@@ -338,9 +323,7 @@ export class SlotsService {
     return this.timeRepository.save(timeSlot);
   }
 
-  // New method to handle deleting a specific Wave time slot with escalation
   async deleteTimeSlot(timeId: string) {
-    // 1. Find the time slot with all needed relations
     const timeSlot = await this.timeRepository.findOne({
       where: { id: timeId },
       relations: ['slot', 'slot.times', 'slot.doctor', 'appointments'],
@@ -356,25 +339,20 @@ export class SlotsService {
       );
     }
 
-    // Ensure times are sorted so cascading works correctly
     timeSlot.slot.times.sort((a, b) => a.startTime.localeCompare(b.startTime));
 
     const appointmentsToMove = timeSlot.appointments;
 
     if (appointmentsToMove.length > 0) {
-      // Strategy 1: Try a small Cascading Move (same session)
       let unresolved = await this.cascadingWaveMove(
         appointmentsToMove,
         timeSlot,
       );
 
-      // Strategy 2: If Cascade failed, escalate to Waterfall Move (diff session/day)
       if (unresolved.length > 0) {
-        // We pass the parent slot so it knows the doctor and date context
         unresolved = await this.resolveConflicts(unresolved, timeSlot.slot);
       }
 
-      // If Waterfall also failed, we cannot delete
       if (unresolved.length > 0) {
         throw new ConflictException(
           `Cannot delete this time slot. ${unresolved.length} patients could not be moved to any available time (in this session or future sessions).`,
@@ -382,7 +360,6 @@ export class SlotsService {
       }
     }
 
-    // If we got here, all patients are moved. Delete the time slot.
     await this.timeRepository.remove(timeSlot);
     return {
       message: 'Time slot deleted and patients successfully rescheduled.',
@@ -523,8 +500,18 @@ export class SlotsService {
       let isResolved = false;
 
       for (const targetSlot of targetSlots) {
+        const isSameDay =
+          new Date(targetSlot.date).toDateString() ===
+          new Date(originalSlot.date).toDateString();
+
+        if (
+          isSameDay &&
+          targetSlot.consultingStartTime < originalSlot.consultingStartTime
+        ) {
+          continue;
+        }
+
         if (targetSlot.scheduleType === 'stream') {
-          // Priority Squeezing: <= instead of <
           if (targetSlot.currentBookings <= targetSlot.totalCapacity) {
             const minutesToAdd =
               targetSlot.slotDuration * targetSlot.currentBookings;
@@ -561,17 +548,14 @@ export class SlotsService {
         }
 
         if (targetSlot.scheduleType === 'wave' && targetSlot.times) {
-          // Ensure times are sorted before searching
           targetSlot.times.sort((a, b) =>
             a.startTime.localeCompare(b.startTime),
           );
 
-          // Priority Search Step 1: Find open slot
           let targetTime = targetSlot.times.find(
             (t) => t.currentBookings < t.capacityPerSlot,
           );
 
-          // Priority Search Step 2: Find exactly full slot to squeeze in
           if (!targetTime) {
             targetTime = targetSlot.times.find(
               (t) => t.currentBookings === t.capacityPerSlot,
@@ -584,7 +568,6 @@ export class SlotsService {
             await this.appointmentRepository.save(appointment);
 
             targetTime.currentBookings += 1;
-            // FIXED: Only mark unavailable if it is actually full (or overfull)
             targetTime.isAvailable =
               targetTime.currentBookings < targetTime.capacityPerSlot;
             await this.timeRepository.save(targetTime);

@@ -7,13 +7,15 @@ import { Time } from 'src/times/entities/time.entity';
 import { Slot } from 'src/slots/entities/slot.entity';
 import { RescheduleHistory } from './entities/reschedule-history.entity';
 import { Patient } from 'src/patients/entities/patient.entity';
-// 👇👇👇 ADD THIS IMPORT 👇👇👇
+
 import { Doctor } from 'src/doctors/entities/doctor.entity';
+import { NotificationsModule } from 'src/notifications/notifications.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([
       Appointment,
+      NotificationsModule,
       Time,
       Slot,
       RescheduleHistory,

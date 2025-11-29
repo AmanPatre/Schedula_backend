@@ -54,6 +54,19 @@ export class DoctorsService {
     return this.doctorRepository.find(findOptions);
   }
 
+  async findOneByUserId(userId: string) {
+    const doctor = await this.doctorRepository.findOne({
+      where: { userId: userId },
+      relations: ['user'],
+    });
+
+    if (!doctor) {
+      throw new NotFoundException('Doctor profile not found for this user.');
+    }
+
+    return doctor;
+  }
+
   async findAvailableSlotsForDoctor(doctorId: string, date: string) {
     const slots = await this.slotRepository.find({
       where: {
