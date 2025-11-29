@@ -10,8 +10,8 @@ import { User } from 'src/users/entities/user.entity';
 export enum NotificationType {
   APPOINTMENT_CANCELLED = 'appointment_cancelled',
   APPOINTMENT_RESCHEDULED = 'appointment_rescheduled',
-  REMINDER = 'reminder', // 👈 Added
-  HEALTH_TIP = 'health_tip', // 👈 Added for engagement service
+  REMINDER = 'reminder',
+  HEALTH_TIP = 'health_tip',
 }
 
 @Entity('notifications')
