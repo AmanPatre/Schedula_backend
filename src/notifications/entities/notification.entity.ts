@@ -12,6 +12,7 @@ export enum NotificationType {
   APPOINTMENT_RESCHEDULED = 'appointment_rescheduled',
   REMINDER = 'reminder',
   HEALTH_TIP = 'health_tip',
+  FOLLOW_UP = 'follow_up', 
 }
 
 @Entity('notifications')

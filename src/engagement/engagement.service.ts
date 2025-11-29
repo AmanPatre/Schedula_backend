@@ -76,12 +76,14 @@ export class EngagementService {
     }
   }
 
-  @Cron('0 0 1 * *')
+  //@Cron('0 0 1 * *')
+  @Cron(CronExpression.EVERY_30_SECONDS)
   async sendFollowUpRecommendations() {
     this.logger.log('Running monthly follow-up check...');
 
     const sixMonthsAgo = new Date();
-    sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+    //sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+    sixMonthsAgo.setMinutes(sixMonthsAgo.getMinutes() - 5);
 
     const oldAppointments = await this.appointmentRepo.find({
       where: {
