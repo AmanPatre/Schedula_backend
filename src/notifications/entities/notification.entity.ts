@@ -5,11 +5,13 @@ import {
   ManyToOne,
   CreateDateColumn,
 } from 'typeorm';
-import { User } from 'src/users/entities/user.entity'; //
+import { User } from 'src/users/entities/user.entity';
 
 export enum NotificationType {
   APPOINTMENT_CANCELLED = 'appointment_cancelled',
   APPOINTMENT_RESCHEDULED = 'appointment_rescheduled',
+  REMINDER = 'reminder', // 👈 Added
+  HEALTH_TIP = 'health_tip', // 👈 Added for engagement service
 }
 
 @Entity('notifications')
@@ -17,7 +19,10 @@ export class Notification {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ type: 'enum', enum: NotificationType })
+  @Column({
+    type: 'enum',
+    enum: NotificationType,
+  })
   type: NotificationType;
 
   @Column()

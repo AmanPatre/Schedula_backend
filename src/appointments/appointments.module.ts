@@ -7,26 +7,25 @@ import { Time } from 'src/times/entities/time.entity';
 import { Slot } from 'src/slots/entities/slot.entity';
 import { RescheduleHistory } from './entities/reschedule-history.entity';
 import { Patient } from 'src/patients/entities/patient.entity';
-
 import { Doctor } from 'src/doctors/entities/doctor.entity';
+// 👇 1. Import the NotificationsModule
 import { NotificationsModule } from 'src/notifications/notifications.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([
       Appointment,
-      NotificationsModule,
       Time,
       Slot,
       RescheduleHistory,
       Patient,
-
       Doctor,
     ]),
+    // 👇 2. Add it to the imports array
+    NotificationsModule,
   ],
   controllers: [AppointmentsController],
   providers: [AppointmentsService],
-  // Exporting it is good practice if other modules need to use AppointmentsService
   exports: [AppointmentsService],
 })
 export class AppointmentsModule {}

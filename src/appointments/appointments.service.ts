@@ -18,6 +18,8 @@ import { AppointmentStatus } from './entities/appointment-status.enum';
 import { Patient } from 'src/patients/entities/patient.entity';
 import { Doctor } from 'src/doctors/entities/doctor.entity';
 import { ConfigService } from '@nestjs/config';
+import { NotificationsService } from 'src/notifications/notifications.service';
+import { NotificationType } from 'src/notifications/entities/notification.entity';
 
 @Injectable()
 export class AppointmentsService {
@@ -35,6 +37,7 @@ export class AppointmentsService {
     @InjectRepository(Doctor)
     private doctorRepository: Repository<Doctor>,
     private configService: ConfigService,
+    private notificationsService: NotificationsService,
   ) {}
 
   async create(createAppointmentDto: CreateAppointmentDto, userId: string) {
@@ -42,6 +45,7 @@ export class AppointmentsService {
 
     const patient = await this.patientRepository.findOne({
       where: { id: patientId },
+      relations: ['user'],
     });
     if (!patient) {
       throw new NotFoundException('Patient not found');
@@ -153,10 +157,15 @@ export class AppointmentsService {
           );
         }
 
+        // Re-fetch to ensure full entity data
         time = await this.timeRepository.findOne({
           where: { id: nextTime.id },
           relations: ['slot', 'slot.doctor'],
         });
+      }
+
+      if (!time) {
+        throw new NotFoundException('Could not secure a valid time slot.');
       }
 
       const appointment = this.appointmentRepository.create({
@@ -218,17 +227,17 @@ export class AppointmentsService {
   async cancel(id: string, user: any) {
     const appointment = await this.appointmentRepository.findOne({
       where: { id },
-      relations: ['time', 'time.slot', 'patient', 'doctor'],
+      relations: ['time', 'time.slot', 'patient', 'doctor', 'doctor.user'],
     });
 
     if (!appointment) {
       throw new NotFoundException('Appointment not found');
     }
 
-    if (
-      appointment.patient.userId !== user.userId &&
-      appointment.doctor.userId !== user.userId
-    ) {
+    const isPatient = appointment.patient.userId === user.userId;
+    const isDoctor = appointment.doctor.userId === user.userId;
+
+    if (!isPatient && !isDoctor) {
       throw new UnauthorizedException(
         'You are not authorized to cancel this appointment.',
       );
@@ -258,38 +267,21 @@ export class AppointmentsService {
       }
     }
 
-    return this.appointmentRepository.save(appointment);
-  }
+    const savedAppointment = await this.appointmentRepository.save(appointment);
 
-  async remove(id: string): Promise<{ message: string }> {
-    const appointment = await this.appointmentRepository.findOne({
-      where: { id },
-      relations: ['time', 'time.slot'],
-    });
+    if (isPatient && appointment.doctor.user) {
+      const date = appointment.time?.slot?.date;
+      const time = appointment.time?.startTime;
+      const patientId = appointment.patient.id;
 
-    if (!appointment) {
-      throw new NotFoundException('Appointment not found');
+      await this.notificationsService.create(
+        appointment.doctor.user.id,
+        NotificationType.APPOINTMENT_CANCELLED,
+        `Appointment Cancelled. Date: ${date}, Time: ${time}, Patient ID: ${patientId}`,
+      );
     }
 
-    if (appointment.time) {
-      if (appointment.time.slot.scheduleType === ScheduleType.WAVE) {
-        appointment.time.currentBookings--;
-        appointment.time.isAvailable = true;
-        await this.timeRepository.save(appointment.time);
-      } else if (appointment.time.slot.scheduleType === ScheduleType.STREAM) {
-        const slot = await this.slotRepository.findOne({
-          where: { id: appointment.time.slot.id },
-        });
-        if (slot) {
-          slot.currentBookings--;
-          await this.slotRepository.save(slot);
-        }
-        await this.timeRepository.remove(appointment.time);
-      }
-    }
-
-    await this.appointmentRepository.remove(appointment);
-    return { message: 'Appointment successfully canceled' };
+    return savedAppointment;
   }
 
   async doctorCancel(
@@ -324,9 +316,10 @@ export class AppointmentsService {
     });
     if (!doctor) throw new NotFoundException('Doctor not found');
 
+    // 👇 CHANGED: Added 'patient' and 'patient.user' to relations so we can notify them
     const appointments = await this.appointmentRepository.find({
       where: { id: In(appointmentIds) },
-      relations: ['time', 'time.slot', 'doctor'],
+      relations: ['time', 'time.slot', 'doctor', 'patient', 'patient.user'],
     });
 
     if (appointments.length === 0) {
@@ -375,9 +368,10 @@ export class AppointmentsService {
       where.slot = { id: slotId };
     }
 
+    // 👇 CHANGED: Added 'patient' and 'patient.user' to relations
     const allAppointments = await this.appointmentRepository.find({
       where: where,
-      relations: ['time', 'time.slot'],
+      relations: ['time', 'time.slot', 'patient', 'patient.user'],
     });
 
     let rescheduledCount = 0;
@@ -401,7 +395,7 @@ export class AppointmentsService {
   ): Promise<Appointment> {
     const appointment = await this.appointmentRepository.findOne({
       where: { id: appointmentId },
-      relations: ['time', 'time.slot', 'patient', 'doctor'],
+      relations: ['time', 'time.slot', 'patient', 'doctor', 'doctor.user'],
     });
 
     if (!appointment) {
@@ -519,6 +513,14 @@ export class AppointmentsService {
       await this.timeRepository.remove(previousTime);
     }
 
+    if (appointment.doctor.user) {
+      await this.notificationsService.create(
+        appointment.doctor.user.id,
+        NotificationType.APPOINTMENT_RESCHEDULED,
+        `Appointment rescheduled by patient to ${newAppointmentTime.startTime}.`,
+      );
+    }
+
     return updatedAppointment;
   }
 
@@ -570,6 +572,15 @@ export class AppointmentsService {
       });
       await this.rescheduleHistoryRepository.save(history);
     }
+
+    // 👇 CHANGED: Send Notification to Patient
+    if (appt.patient && appt.patient.user) {
+      await this.notificationsService.create(
+        appt.patient.user.id,
+        NotificationType.APPOINTMENT_RESCHEDULED,
+        `Your appointment has been rescheduled by the doctor to ${newStartTime}.`,
+      );
+    }
   }
 
   private addMinutesToTime(timeString: string, minutesToAdd: number): string {
@@ -597,9 +608,37 @@ export class AppointmentsService {
     return `This action returns all appointments`;
   }
 
-  remove(id: string) {
-    return `This action removes a #${id} appointment`;
+  async remove(id: string): Promise<{ message: string }> {
+    const appointment = await this.appointmentRepository.findOne({
+      where: { id },
+      relations: ['time', 'time.slot'],
+    });
+
+    if (!appointment) {
+      throw new NotFoundException('Appointment not found');
+    }
+
+    if (appointment.time) {
+      if (appointment.time.slot.scheduleType === ScheduleType.WAVE) {
+        appointment.time.currentBookings--;
+        appointment.time.isAvailable = true;
+        await this.timeRepository.save(appointment.time);
+      } else if (appointment.time.slot.scheduleType === ScheduleType.STREAM) {
+        const slot = await this.slotRepository.findOne({
+          where: { id: appointment.time.slot.id },
+        });
+        if (slot) {
+          slot.currentBookings--;
+          await this.slotRepository.save(slot);
+        }
+        await this.timeRepository.remove(appointment.time);
+      }
+    }
+
+    await this.appointmentRepository.remove(appointment);
+    return { message: 'Appointment successfully canceled' };
   }
+
   update(id: string, updateAppointmentDto: UpdateAppointmentDto) {
     return this.appointmentRepository.update(id, updateAppointmentDto);
   }

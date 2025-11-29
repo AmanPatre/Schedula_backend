@@ -26,4 +26,9 @@ export class NotificationsService {
       order: { createdAt: 'DESC' },
     });
   }
+
+  async markAsRead(id: string) {
+    await this.notificationRepo.update(id, { isRead: true });
+    return { message: 'Notification marked as read' };
+  }
 }
