@@ -316,7 +316,6 @@ export class AppointmentsService {
     });
     if (!doctor) throw new NotFoundException('Doctor not found');
 
-    // 👇 CHANGED: Added 'patient' and 'patient.user' to relations so we can notify them
     const appointments = await this.appointmentRepository.find({
       where: { id: In(appointmentIds) },
       relations: ['time', 'time.slot', 'doctor', 'patient', 'patient.user'],
@@ -368,7 +367,6 @@ export class AppointmentsService {
       where.slot = { id: slotId };
     }
 
-    // 👇 CHANGED: Added 'patient' and 'patient.user' to relations
     const allAppointments = await this.appointmentRepository.find({
       where: where,
       relations: ['time', 'time.slot', 'patient', 'patient.user'],
@@ -573,7 +571,7 @@ export class AppointmentsService {
       await this.rescheduleHistoryRepository.save(history);
     }
 
-    // 👇 CHANGED: Send Notification to Patient
+    // 👇 CHANGED: Send Notification to Patient (for Rescheduling)
     if (appt.patient && appt.patient.user) {
       await this.notificationsService.create(
         appt.patient.user.id,
@@ -608,14 +606,25 @@ export class AppointmentsService {
     return `This action returns all appointments`;
   }
 
+  // 👇 UPDATED: remove() now sends cancellation notification
   async remove(id: string): Promise<{ message: string }> {
     const appointment = await this.appointmentRepository.findOne({
       where: { id },
-      relations: ['time', 'time.slot'],
+      // We need patient and user details to send notification
+      relations: ['time', 'time.slot', 'patient', 'patient.user', 'doctor'],
     });
 
     if (!appointment) {
       throw new NotFoundException('Appointment not found');
+    }
+
+    // Notify Patient about cancellation if triggered by doctor/admin
+    if (appointment.patient && appointment.patient.user) {
+      await this.notificationsService.create(
+        appointment.patient.user.id,
+        NotificationType.APPOINTMENT_CANCELLED,
+        `Your appointment with Dr. ${appointment.doctor.specialization} has been cancelled by the doctor.`,
+      );
     }
 
     if (appointment.time) {

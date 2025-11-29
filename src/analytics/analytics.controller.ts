@@ -5,26 +5,21 @@ import {
   Req,
   ConflictException,
 } from '@nestjs/common';
-import { AuthGuard } from '@nestjs/passport';
 import { AnalyticsService } from './analytics.service';
-import { DoctorsService } from 'src/doctors/doctors.service'; // To get Doctor ID from User ID
+import { AuthGuard } from '@nestjs/passport';
 
 @Controller('analytics')
 @UseGuards(AuthGuard('jwt'))
 export class AnalyticsController {
-  constructor(
-    private readonly analyticsService: AnalyticsService,
-    private readonly doctorsService: DoctorsService,
-  ) {}
+  constructor(private readonly analyticsService: AnalyticsService) {}
 
-  @Get('my-utilization')
-  async getMyUtilization(@Req() req: any) {
+  @Get('utilization')
+  getSlotUtilization(@Req() req: any) {
     if (req.user.role !== 'doctor') {
-      throw new ConflictException('Only doctors can view analytics.');
+      throw new ConflictException(
+        'Only doctors can view utilization analytics.',
+      );
     }
-
-    const doctor = await this.doctorsService.findOneByUserId(req.user.userId);
-
-    return this.analyticsService.getDoctorSlotUtilization(doctor.id);
+    return this.analyticsService.getDoctorSlotUtilization(req.user.userId);
   }
 }

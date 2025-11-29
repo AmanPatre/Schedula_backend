@@ -1,18 +1,29 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { Slot } from 'src/slots/entities/slot.entity'; //
+import { Analytics } from './entities/analytics.entity';
+import { Slot } from 'src/slots/entities/slot.entity';
+import { Doctor } from 'src/doctors/entities/doctor.entity';
 
 @Injectable()
 export class AnalyticsService {
   constructor(
+    @InjectRepository(Analytics)
+    private analyticsRepository: Repository<Analytics>,
     @InjectRepository(Slot)
-    private slotRepo: Repository<Slot>,
+    private slotRepository: Repository<Slot>,
+    @InjectRepository(Doctor)
+    private doctorRepository: Repository<Doctor>,
   ) {}
 
-  async getDoctorSlotUtilization(doctorId: string) {
-    const slots = await this.slotRepo.find({
-      where: { doctor: { id: doctorId } },
+  async getDoctorSlotUtilization(doctorUserId: string) {
+    const doctor = await this.doctorRepository.findOne({
+      where: { userId: doctorUserId },
+    });
+    if (!doctor) throw new NotFoundException('Doctor not found');
+
+    const slots = await this.slotRepository.find({
+      where: { doctor: { id: doctor.id } },
     });
 
     let totalCapacity = 0;
@@ -27,10 +38,10 @@ export class AnalyticsService {
       totalCapacity > 0 ? (totalBookings / totalCapacity) * 100 : 0;
 
     return {
-      totalSlots: slots.length,
+      totalSlotsDefined: slots.length,
       totalCapacity,
-      totalBookings,
-      utilizationRate: `${utilizationRate.toFixed(2)}%`,
+      currentBookings: totalBookings,
+      utilizationPercentage: parseFloat(utilizationRate.toFixed(2)),
     };
   }
 }

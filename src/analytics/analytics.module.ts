@@ -5,10 +5,9 @@ import { AnalyticsService } from './analytics.service';
 import { AnalyticsController } from './analytics.controller';
 import { Slot } from 'src/slots/entities/slot.entity';
 import { Doctor } from 'src/doctors/entities/doctor.entity';
-import { DoctorsModule } from 'src/doctors/doctors.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Analytics, Slot, Doctor]), DoctorsModule],
+  imports: [TypeOrmModule.forFeature([Analytics, Slot, Doctor])],
   controllers: [AnalyticsController],
   providers: [AnalyticsService],
 })
