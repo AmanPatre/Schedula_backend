@@ -7,6 +7,14 @@ async function bootstrap() {
 
   app.setGlobalPrefix('api/v1');
 
+  const corsOrigin = process.env.CORS_ORIGIN;
+  if (corsOrigin) {
+    app.enableCors({
+      origin: corsOrigin.split(',').map((o) => o.trim()),
+      credentials: true,
+    });
+  }
+
   app.useGlobalPipes(
     new ValidationPipe({
       transform: true,
@@ -14,6 +22,7 @@ async function bootstrap() {
     }),
   );
 
-  await app.listen(3000);
+  const port = Number(process.env.PORT) || 3000;
+  await app.listen(port, '0.0.0.0');
 }
 bootstrap();

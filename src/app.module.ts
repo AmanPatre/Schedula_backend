@@ -26,16 +26,41 @@ import { EngagementModule } from './engagement/engagement.module';
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
-      useFactory: (configService: ConfigService) => ({
-        type: 'postgres',
-        host: configService.get<string>('DB_HOST'),
-        port: configService.get<number>('DB_PORT'),
-        username: configService.get<string>('DB_USERNAME'),
-        password: configService.get<string>('DB_PASSWORD'),
-        database: configService.get<string>('DB_DATABASE'),
-        autoLoadEntities: true,
-        synchronize: true,
-      }),
+      useFactory: (configService: ConfigService) => {
+        const isProduction =
+          configService.get<string>('NODE_ENV') === 'production';
+        const databaseUrl = configService.get<string>('DATABASE_URL');
+        const ssl =
+          configService.get<string>('DB_SSL') === 'true' || isProduction
+            ? { rejectUnauthorized: false }
+            : false;
+        const synchronize =
+          configService.get<string>('TYPEORM_SYNCHRONIZE') === 'true' ||
+          (!isProduction &&
+            configService.get<string>('TYPEORM_SYNCHRONIZE') !== 'false');
+
+        if (databaseUrl) {
+          return {
+            type: 'postgres' as const,
+            url: databaseUrl,
+            ssl,
+            autoLoadEntities: true,
+            synchronize,
+          };
+        }
+
+        return {
+          type: 'postgres' as const,
+          host: configService.get<string>('DB_HOST'),
+          port: configService.get<number>('DB_PORT'),
+          username: configService.get<string>('DB_USERNAME'),
+          password: configService.get<string>('DB_PASSWORD'),
+          database: configService.get<string>('DB_DATABASE'),
+          ssl,
+          autoLoadEntities: true,
+          synchronize,
+        };
+      },
     }),
 
     ScheduleModule.forRoot(),
